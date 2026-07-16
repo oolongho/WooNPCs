@@ -26,7 +26,7 @@ import java.util.UUID;
  *
  * <h2>包发送顺序约定</h2>
  * <ul>
- *   <li>{@link #spawnPlayer}：PlayerInfo(ADD) → AddPlayer → SetEntityData → PlayerInfo(REMOVE_FROM_LIST)</li>
+ *   <li>{@link #spawnPlayer}：PlayerInfo(ADD) → AddPlayer → SetEntityData → (若 !showInTab) PlayerInfo(UPDATE_LISTED, listed=false)</li>
  *   <li>{@link #despawn}：RemoveEntities → PlayerInfo(REMOVE)</li>
  *   <li>其他更新方法：发送对应单个包</li>
  * </ul>
@@ -43,7 +43,7 @@ public interface NmsAdapter {
      * ClientboundPlayerInfoUpdatePacket(ADD_PLAYER) →
      * ClientboundAddPlayerPacket →
      * ClientboundSetEntityDataPacket →
-     * （若 {@code spawnData.showInTab() == false}）ClientboundPlayerInfoUpdatePacket(REMOVE_FROM_LIST)</p>
+     * （若 {@code spawnData.showInTab() == false}）ClientboundPlayerInfoUpdatePacket(UPDATE_LISTED, listed=false)</p>
      *
      * @param player    目标玩家（接收数据包者）
      * @param spawnData NPC 生成数据
@@ -112,7 +112,7 @@ public interface NmsAdapter {
      * 向指定玩家发送 tab 列表移除包。
      *
      * <p>在 {@link #spawnPlayer} 后调用，确保 NPC 不在 tab 列表显示。
-     * 内部发送 ClientboundPlayerInfoUpdatePacket(UPDATE_LISTINGS + REMOVE_FROM_LIST)。</p>
+     * 内部发送 ClientboundPlayerInfoUpdatePacket(UPDATE_LISTED, listed=false)。</p>
      *
      * @param player   目标玩家
      * @param entityId NPC 实体 ID

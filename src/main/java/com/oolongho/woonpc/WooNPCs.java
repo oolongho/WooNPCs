@@ -17,12 +17,10 @@ public class WooNPCs extends JavaPlugin {
     /** 插件单例实例 */
     private static WooNPCs instance;
 
-    public WooNPCs() {
-        instance = this;
-    }
-
     @Override
     public void onEnable() {
+        instance = this;
+
         // 输出启用日志
         String version = getPluginMeta().getVersion();
         getLogger().info(() -> "WooNPCs v" + version + " 已启用");

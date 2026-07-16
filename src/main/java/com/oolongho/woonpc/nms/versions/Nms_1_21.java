@@ -6,26 +6,34 @@ import com.oolongho.woonpc.nms.dto.NpcDisplayNameData;
 import com.oolongho.woonpc.nms.dto.NpcEquipmentData;
 import com.oolongho.woonpc.nms.dto.NpcMetadataData;
 import com.oolongho.woonpc.nms.dto.NpcSpawnData;
+import com.oolongho.woonpc.nms.dto.NpcTexture;
 import com.oolongho.woonpc.nms.util.PacketFactory;
+import com.oolongho.woonpc.nms.util.ReflectUtil;
+import com.oolongho.woonpc.nms.util.WooNPCsReflectException;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.ApiStatus;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
 /**
- * Minecraft 1.21.0 - 1.21.4 NMS 适配器实现。
+ * Minecraft 1.21.2 - 1.21.4 NMS 适配器实现。
  *
- * <p>覆盖 1.21.0 至 1.21.4 全部补丁版本。此版本区间的 NMS 特征：</p>
+ * <p>覆盖 1.21.2 至 1.21.4 全部补丁版本。此版本区间的 NMS 特征：</p>
  * <ul>
  *   <li>{@code SynchedEntityData.DataValue.create(EntityDataAccessor, Object)} —— 需要 accessor</li>
  *   <li>{@code ClientboundTeleportEntityPacket} 公开构造器签名为
  *       {@code (int, PositionMoveRotation, Set<Relative>, boolean)}</li>
  *   <li>{@code ClientboundRotateHeadPacket} 仅暴露 {@code (Entity, byte)} 构造器，
  *       需通过 {@code RegistryFriendlyByteBuf + STREAM_CODEC.decode} 绕过</li>
+ *   <li>{@code com.mojang.authlib.GameProfile} 为普通类，2 参构造器 {@code (UUID, String)}，
+ *       通过 {@code getProperties().put(key, property)} 添加皮肤纹理</li>
  * </ul>
+ *
+ * <p><b>不支持 1.21.0-1.21.1</b>（与 fancynpcs-v2 决策一致，NMS API 差异过大）。</p>
  *
  * <h2>包发送流程</h2>
  * <ul>
@@ -37,6 +45,13 @@ import java.util.UUID;
  *   <li>updateHeadRotation：RotateHead</li>
  *   <li>sendTabRemove：PlayerInfo(UPDATE_LISTED, listed=false)</li>
  *   <li>sendDisplayName：AddEntity(TextDisplay) + SetEntityData(text)</li>
+ * </ul>
+ *
+ * <h2>子类覆盖点</h2>
+ * <ul>
+ *   <li>{@link Nms_1_21_5}：1.21.5+ DataValue.create 签名变化（已由 PacketFactory 反射自适应）</li>
+ *   <li>{@code Nms_1_21_11}：1.21.9+ GameProfile 改为 record 风格，需覆盖
+ *       {@link #createGameProfile} 使用 3 参构造器 + PropertyMap</li>
  * </ul>
  *
  * <p>本类为内部实现，由 {@link com.oolongho.woonpc.nms.NmsAdapterFactory} 按版本选择实例化。
@@ -53,12 +68,22 @@ public class Nms_1_21 implements NmsAdapter {
     /** TextDisplay 文本的序列化器 ID（Component = 4） */
     private static final int SER_COMPONENT = 4;
 
+    /** GameProfile 反射类缓存（供 createGameProfile 钩子方法使用） */
+    protected static final Class<?> GAME_PROFILE_CLASS =
+            ReflectUtil.getClass("com.mojang.authlib.GameProfile");
+
+    /** authlib Property 反射类缓存 */
+    protected static final Class<?> PROPERTY_CLASS =
+            ReflectUtil.getClass("com.mojang.authlib.properties.Property");
+
     @Override
     public void spawnPlayer(Player player, NpcSpawnData spawnData) {
         // 阶段 1：PlayerInfo(ADD_PLAYER)，始终 listed=true 确保实体被客户端接受
+        // GameProfile 由本类 createGameProfile 钩子方法构造（1.21.9+ 子类覆盖）
+        Object gameProfile = createGameProfile(
+                spawnData.uuid(), spawnData.username(), spawnData.texture());
         Object infoAddPacket = PacketFactory.createPlayerInfoAddPacket(
-                spawnData.uuid(), spawnData.username(), spawnData.texture(),
-                spawnData.displayName(), true, 0);
+                spawnData.uuid(), gameProfile, spawnData.displayName(), true, 0);
 
         // 阶段 2：AddPlayer（客户端生成玩家实体）
         Object addPlayerPacket = PacketFactory.createAddPlayerPacket(
@@ -75,7 +100,7 @@ public class Nms_1_21 implements NmsAdapter {
         // 阶段 4：若 !showInTab，从 tab 列表移除（实体仍保留）
         if (!spawnData.showInTab()) {
             Object removeListedPacket = PacketFactory.createPlayerInfoUpdateListedPacket(
-                    spawnData.uuid(), false);
+                    spawnData.uuid(), gameProfile, false);
             PacketFactory.sendPacket(player, removeListedPacket);
         }
     }
@@ -113,7 +138,10 @@ public class Nms_1_21 implements NmsAdapter {
 
     @Override
     public void sendTabRemove(Player player, int entityId, UUID uuid) {
-        Object packet = PacketFactory.createPlayerInfoUpdateListedPacket(uuid, false);
+        // UPDATE_LISTED 包仅依赖 UUID 匹配客户端已注册条目，但仍需 GameProfile 引用满足 Entry 构造器签名。
+        // 1.21.9+ 由于 GameProfile 变为 record，无法用 2 参构造器创建占位实例，故也走 createGameProfile 钩子。
+        Object gameProfile = createGameProfile(uuid, "", null);
+        Object packet = PacketFactory.createPlayerInfoUpdateListedPacket(uuid, gameProfile, false);
         PacketFactory.sendPacket(player, packet);
     }
 
@@ -138,6 +166,46 @@ public class Nms_1_21 implements NmsAdapter {
     @Override
     public String getVersion() {
         return "1.21";
+    }
+
+    /**
+     * 构造 NMS {@code GameProfile} 实例（含可选 textures property）。
+     *
+     * <p><b>版本差异</b>：</p>
+     * <ul>
+     *   <li>1.21.2-1.21.8（本类实现）：GameProfile 为普通类，使用 2 参构造器
+     *       {@code new GameProfile(uuid, name)}，再通过 {@code getProperties().put("textures", property)} 注入皮肤</li>
+     *   <li>1.21.9+（{@code Nms_1_21_11} 覆盖）：GameProfile 变为 record 风格，
+     *       需使用 3 参构造器 {@code new GameProfile(uuid, name, propertyMap)}，
+     *       propertyMap 由 {@code new PropertyMap(ImmutableMultimap.of("textures", property))} 构造</li>
+     * </ul>
+     *
+     * <p>本方法为子类覆盖点，由 {@link PacketFactory#createPlayerInfoAddPacket} 与
+     * {@link PacketFactory#createPlayerInfoUpdateListedPacket} 的调用方（本类的 spawnPlayer / sendTabRemove）
+     * 调用，将构造好的 GameProfile 传入 PacketFactory。</p>
+     *
+     * @param uuid     NPC 的 UUID
+     * @param username GameProfile 玩家名
+     * @param texture  皮肤纹理，null 表示无皮肤（默认 Steve/Alex）
+     * @return NMS GameProfile 实例
+     */
+    protected Object createGameProfile(UUID uuid, String username, @Nullable NpcTexture texture) {
+        try {
+            Object profile = GAME_PROFILE_CLASS
+                    .getConstructor(UUID.class, String.class)
+                    .newInstance(uuid, username);
+            if (texture != null) {
+                Object property = PROPERTY_CLASS
+                        .getConstructor(String.class, String.class, String.class)
+                        .newInstance("textures", texture.value(), texture.signature());
+                Object propertyMap = GAME_PROFILE_CLASS.getMethod("getProperties").invoke(profile);
+                propertyMap.getClass().getMethod("put", Object.class, Object.class)
+                        .invoke(propertyMap, "textures", property);
+            }
+            return profile;
+        } catch (ReflectiveOperationException e) {
+            throw new WooNPCsReflectException("Failed to construct GameProfile for " + username, e);
+        }
     }
 
     /**

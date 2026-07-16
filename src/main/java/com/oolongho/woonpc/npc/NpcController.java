@@ -53,7 +53,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *       {@link #updateHeadRotation} / {@link #moveTo} / {@link #updateMetadata} /
  *       {@link #updateDisplayName}：完整实现，调用 NmsAdapter</li>
  *   <li>{@link #followPath}：Phase 2 预留接口，抛 {@link UnsupportedOperationException}</li>
- *   <li>显示名通过独立的 TextDisplay 实体实现，{@code displayEntityId} 懒分配</li>
+ *   <li>显示名通过独立的 TextDisplay 实体实现，{@code displayEntityId} 在构造时预分配（final 字段）</li>
  * </ul>
  *
  * @author oolongho
@@ -76,14 +76,15 @@ public final class NpcController {
     /** 可见玩家集合（UUID），并发安全 */
     private final Set<UUID> visiblePlayers;
 
-    /** 显示名 TextDisplay 实体 ID（懒分配，-1 表示尚未分配） */
-    private int displayEntityId = -1;
+    /** 显示名 TextDisplay 实体 ID（构造时预分配，避免懒分配竞态） */
+    private final int displayEntityId;
 
     /**
      * 构造控制器。
      *
-     * <p>构造时从 {@link EntityIdGenerator} 分配 entityId，并从 {@link NmsAdapterFactory}
-     * 获取对应版本的 {@link NmsAdapter}。Task 4 未完成时工厂抛异常。</p>
+     * <p>构造时从 {@link EntityIdGenerator} 分配 entityId 与 displayEntityId，并从
+     * {@link NmsAdapterFactory} 获取对应版本的 {@link NmsAdapter}。
+     * Task 4 未完成时工厂抛异常。</p>
      *
      * @param uuid     NPC 的 UUID，不可为 null
      * @param username GameProfile 玩家名，不可为 null 或空白
@@ -91,6 +92,8 @@ public final class NpcController {
      */
     public NpcController(UUID uuid, String username) {
         this.entityId = EntityIdGenerator.nextEntityId();
+        // 构造时预分配 displayEntityId，避免 updateDisplayName 首次调用时的 check-then-set 竞态
+        this.displayEntityId = EntityIdGenerator.nextEntityId();
         this.uuid = Objects.requireNonNull(uuid, "uuid cannot be null");
         this.username = Objects.requireNonNull(username, "username cannot be null");
         if (username.isBlank()) {
@@ -245,18 +248,14 @@ public final class NpcController {
     /**
      * 更新头顶显示名。
      *
-     * <p>首次调用时通过 {@link EntityIdGenerator} 分配独立的 {@code displayEntityId}
-     * （TextDisplay 实体 ID），后续调用复用该 ID 仅更新文本内容。
-     * 显示名实体定位在 NPC 头顶 Y+2.0 处。</p>
+     * <p>{@code displayEntityId} 在 {@link #NpcController 构造时} 已预分配（TextDisplay 实体 ID），
+     * 此方法仅复用该 ID 更新文本内容。显示名实体定位在 NPC 头顶 Y+2.0 处。</p>
      *
      * @param data NPC 数据快照
      * @throws NullPointerException 当 data 为 null
      */
     public void updateDisplayName(NpcData data) {
         Objects.requireNonNull(data, "data cannot be null");
-        if (displayEntityId == -1) {
-            displayEntityId = EntityIdGenerator.nextEntityId();
-        }
         Location displayNameLoc = data.location().clone().add(0, 2.0, 0);
         var displayNameData = new NpcDisplayNameData(
                 displayEntityId, data.displayName(), displayNameLoc);

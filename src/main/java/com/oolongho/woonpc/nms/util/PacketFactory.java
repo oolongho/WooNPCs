@@ -1,7 +1,6 @@
 package com.oolongho.woonpc.nms.util;
 
 import com.oolongho.woonpc.nms.dto.MetadataEntry;
-import com.oolongho.woonpc.nms.dto.NpcTexture;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.EquipmentSlot;
@@ -65,10 +64,6 @@ public final class PacketFactory {
             ReflectUtil.getClass("net.minecraft.world.entity.EquipmentSlot");
     private static final Class<?> COMPONENT_CLASS =
             ReflectUtil.getClass("net.minecraft.network.chat.Component");
-    private static final Class<?> GAME_PROFILE_CLASS =
-            ReflectUtil.getClass("com.mojang.authlib.GameProfile");
-    private static final Class<?> PROPERTY_CLASS =
-            ReflectUtil.getClass("com.mojang.authlib.properties.Property");
     private static final Class<?> GAME_TYPE_CLASS =
             ReflectUtil.getClass("net.minecraft.world.level.GameType");
     private static final Class<?> DATA_VALUE_CLASS =
@@ -193,19 +188,20 @@ public final class PacketFactory {
      * <p>对应 {@code ClientboundPlayerInfoUpdatePacket}（Action=ADD_PLAYER + UPDATE_LISTED + UPDATE_DISPLAY_NAME），
      * 用于在客户端注册 NPC 的 tab 条目（为后续 AddPlayer 包做准备）。</p>
      *
+     * <p><b>版本兼容</b>：GameProfile 在 1.21.9+ 由普通类变为 record（构造器从 2 参变为 3 参），
+     * 因此 GameProfile 的构造由调用方（{@code NmsAdapter} 实现类）通过
+     * {@code createGameProfile} 钩子方法完成，本方法仅消费预构造好的实例。</p>
+     *
      * @param uuid        NPC 的 UUID
-     * @param username    GameProfile 玩家名
-     * @param texture     皮肤纹理，null 表示默认 Steve/Alex
+     * @param gameProfile 预构造的 NMS GameProfile 实例（包含 textures property）
      * @param displayName tab 显示名文本，null 表示不显示
      * @param listed      是否在 tab 列表显示（通常 false，spawn 后立即移除）
      * @param latency     模拟延迟（毫秒），通常 0
      * @return NMS PlayerInfoUpdatePacket 实例
      */
-    public static Object createPlayerInfoAddPacket(UUID uuid, String username,
-                                                   @Nullable NpcTexture texture,
+    public static Object createPlayerInfoAddPacket(UUID uuid, Object gameProfile,
                                                    @Nullable String displayName,
                                                    boolean listed, int latency) {
-        Object gameProfile = createGameProfile(uuid, username, texture);
         Object displayComponent = displayName != null ? createComponent(displayName) : null;
         Object entry = createPlayerInfoEntry(uuid, gameProfile, listed, latency, displayComponent);
 
@@ -239,12 +235,16 @@ public final class PacketFactory {
      * <p>用于在 spawn 后将 NPC 从 tab 列表移除（listed=false）或重新加入（listed=true）。
      * 客户端通过 UUID 匹配已注册的条目，GameProfile 内容被忽略。</p>
      *
-     * @param uuid   NPC 的 UUID
-     * @param listed 是否在 tab 列表显示
+     * <p><b>版本兼容</b>：与 {@link #createPlayerInfoAddPacket} 同理，GameProfile 由调用方预构造。
+     * 尽管 UPDATE_LISTED 不依赖 GameProfile 内容，但 Entry 构造器仍要求非 null 的 GameProfile
+     * 引用（1.21.9+ 由于 GameProfile 为 record，无法用 2 参构造器创建占位实例）。</p>
+     *
+     * @param uuid        NPC 的 UUID
+     * @param gameProfile 预构造的 NMS GameProfile 实例（占位即可）
+     * @param listed      是否在 tab 列表显示
      * @return NMS PlayerInfoUpdatePacket 实例
      */
-    public static Object createPlayerInfoUpdateListedPacket(UUID uuid, boolean listed) {
-        Object gameProfile = createGameProfile(uuid, "", null);
+    public static Object createPlayerInfoUpdateListedPacket(UUID uuid, Object gameProfile, boolean listed) {
         Object entry = createPlayerInfoEntry(uuid, gameProfile, listed, 0, null);
 
         @SuppressWarnings({"unchecked", "rawtypes"})
@@ -515,31 +515,14 @@ public final class PacketFactory {
     }
 
     /**
-     * 创建 GameProfile 实例，附加 textures property（若有皮肤纹理）。
-     */
-    private static Object createGameProfile(UUID uuid, String username, @Nullable NpcTexture texture) {
-        try {
-            Object profile = GAME_PROFILE_CLASS.getConstructor(UUID.class, String.class)
-                    .newInstance(uuid, username);
-            if (texture != null) {
-                Object property = PROPERTY_CLASS.getConstructor(String.class, String.class, String.class)
-                        .newInstance("textures", texture.value(), texture.signature());
-                Object propertyMap = GAME_PROFILE_CLASS.getMethod("getProperties").invoke(profile);
-                propertyMap.getClass().getMethod("put", Object.class, Object.class)
-                        .invoke(propertyMap, "textures", property);
-            }
-            return profile;
-        } catch (ReflectiveOperationException e) {
-            throw new WooNPCsReflectException("Failed to construct GameProfile for " + username, e);
-        }
-    }
-
-    /**
      * 创建 PlayerInfoUpdatePacket.Entry 实例。
      *
      * <p>1.21+ Entry 签名：(UUID, GameProfile, listed, latency, GameType, displayName, showHat, listOrder, chatSession)
      * chatSession 传 null 表示无聊天会话。通过扫描构造器按参数数量匹配，避免 chatSession
      * 类型在不同版本间的差异（RemoteChatSession.Data 等）。</p>
+     *
+     * <p><b>listOrder = -1</b>：与 fancynpcs-v2 对齐，-1 表示不强制排序，避免
+     * 与真实玩家在 tab 列表中的相对位置产生不一致行为。</p>
      */
     private static Object createPlayerInfoEntry(UUID uuid, Object gameProfile,
                                                 boolean listed, int latency,
@@ -549,7 +532,7 @@ public final class PacketFactory {
                 ctor.setAccessible(true);
                 try {
                     return ctor.newInstance(uuid, gameProfile, listed, latency,
-                            GAME_TYPE_SURVIVAL, displayName, true, 0, null);
+                            GAME_TYPE_SURVIVAL, displayName, true, -1, null);
                 } catch (ReflectiveOperationException e) {
                     throw new WooNPCsReflectException("Failed to construct PlayerInfoUpdatePacket.Entry", e);
                 }
