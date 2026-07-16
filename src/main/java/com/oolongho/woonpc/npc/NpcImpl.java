@@ -4,6 +4,7 @@ import com.oolongho.woonpc.api.Npc;
 import com.oolongho.woonpc.api.NpcData;
 import com.oolongho.woonpc.api.NpcField;
 import com.oolongho.woonpc.event.NpcDespawnEvent;
+import com.oolongho.woonpc.event.NpcInteractEvent;
 import com.oolongho.woonpc.event.NpcSpawnEvent;
 import com.oolongho.woonpc.manager.NpcManagerImpl;
 import org.bukkit.Bukkit;
@@ -41,7 +42,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *   <li>{@link #update()}：按 {@link NpcData#dirtyFields()} 增量同步，完成后 data = data.cleanCopy()</li>
  *   <li>{@link #moveTo(Location)}：data = data.withLocation(loc) + controller.moveTo</li>
  *   <li>{@link #lookAt(Location)}：计算 yaw/pitch + controller.updateHeadRotation</li>
- *   <li>{@link #interact(Player, ClickType)}：留 TODO（Task 8/12 实现 Action 执行）</li>
+ *   <li>{@link #interact(Player, ClickType)}：触发 {@link NpcInteractEvent}（ActionManager 由 Task 18 装配）</li>
  * </ul>
  *
  * @author oolongho
@@ -217,8 +218,11 @@ public final class NpcImpl extends Npc {
 
     @Override
     public void interact(Player player, ClickType clickType) {
-        // TODO Task 8/12：触发 NpcInteractEvent + 执行 ActionManager 动作集合
-        // 流程：检查 interactionCooldown → 触发 NpcInteractEvent →（未取消）执行 ClickType 对应动作
+        Objects.requireNonNull(player, "player cannot be null");
+        Objects.requireNonNull(clickType, "clickType cannot be null");
+        NpcInteractEvent event = new NpcInteractEvent(player, this, clickType);
+        Bukkit.getPluginManager().callEvent(event);
+        // ActionManager 监听 NpcInteractEvent 并执行 actions（Task 18 装配后生效）
     }
 
     // ==================== 数据访问覆盖（保证可见性） ====================
