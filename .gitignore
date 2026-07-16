@@ -2,7 +2,7 @@
 .gradle/
 build/
 out/
-oolongho/
+/oolongho/
 
 # IDE
 .idea/
