@@ -11,6 +11,7 @@ import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.ApiStatus;
 
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -54,8 +55,8 @@ public final class NpcImpl extends Npc {
     /**
      * 目标可见玩家集合（应看到此 NPC 的玩家 UUID）。
      *
-     * <p>由 Task 7 的 {@code VisibilityTracker} 维护：玩家进入可见范围 → {@link #addViewer}；
-     * 玩家离开 → {@link #removeViewer}。{@link #spawn()} 遍历此集合发送 spawn 包。</p>
+     * <p>由 Task 7 的 {@code VisibilityTracker} 维护：玩家进入可见范围 → {@link #showTo}；
+     * 玩家离开 → {@link #hideFrom}。{@link #spawn()} 遍历此集合发送 spawn 包。</p>
      *
      * <p>Task 5 阶段此集合为空，spawn 为空操作。与 {@link NpcController#getVisiblePlayers()}
      * 的区别：后者记录"已收到 spawn 包"的玩家（协议层状态），本字段记录"应收到 spawn 包"
@@ -249,29 +250,61 @@ public final class NpcImpl extends Npc {
     // ==================== Tracker 接入点（Task 7 使用） ====================
 
     /**
-     * 添加目标可见玩家（由 {@code VisibilityTracker} 调用）。
+     * 让 NPC 对指定玩家可见（加入 targetViewers + 发送 spawn 包，不触发事件）。
      *
-     * <p>玩家进入可见范围时调用。后续 {@link #spawn()} 会遍历此集合发送 spawn 包。</p>
+     * <p>由 {@code VisibilityTracker} 在玩家进入可见距离时调用。
+     * 与 {@link #spawn()} 的区别：spawn 触发 NpcSpawnEvent 并遍历全部 targetViewers 发包；
+     * 本方法仅对单个玩家发包，不触发事件（协议层操作）。</p>
      *
-     * @param playerId 玩家 UUID
-     * @return 玩家先前不在集合中返回 true
+     * <p>幂等：若玩家已在 targetViewers 中，直接返回（{@link NpcController#spawn} 内部
+     * 通过 visiblePlayers 检查避免重复发包）。</p>
+     *
+     * @param player 目标玩家
      */
     @ApiStatus.Internal
-    public boolean addViewer(UUID playerId) {
-        return targetViewers.add(playerId);
+    public void showTo(Player player) {
+        Objects.requireNonNull(player, "player cannot be null");
+        if (!targetViewers.add(player.getUniqueId())) {
+            return;
+        }
+        NpcData snapshot;
+        synchronized (this) {
+            snapshot = data;
+        }
+        controller.spawn(player, snapshot);
     }
 
     /**
-     * 移除目标可见玩家（由 {@code VisibilityTracker} 调用）。
+     * 让 NPC 对指定玩家不可见（移出 targetViewers + 发送 despawn 包，不触发事件）。
      *
-     * <p>玩家离开可见范围时调用。Tracker 应同时调用 {@link NpcController#despawn(Player)}
-     * 发送 despawn 包（从已可见集合移除）。</p>
+     * <p>由 {@code VisibilityTracker} 在玩家离开可见距离或下线时调用。
+     * 幂等：若玩家不在 targetViewers 中，直接返回。</p>
      *
-     * @param playerId 玩家 UUID
-     * @return 玩家先前在集合中返回 true
+     * @param player 目标玩家
      */
     @ApiStatus.Internal
-    public boolean removeViewer(UUID playerId) {
-        return targetViewers.remove(playerId);
+    public void hideFrom(Player player) {
+        Objects.requireNonNull(player, "player cannot be null");
+        if (!targetViewers.remove(player.getUniqueId())) {
+            return;
+        }
+        controller.despawn(player);
+    }
+
+    /**
+     * 直接设置头部朝向（不修改 NpcData.location）。
+     *
+     * <p>由 {@code LookTracker} 调用：插值计算后的 yaw/pitch 通过本方法发包。
+     * 与 {@link #lookAt(Location)} 的区别：lookAt 接受目标位置并自行计算 yaw/pitch；
+     * 本方法直接接收 yaw/pitch，适合 Tracker 内部插值后调用。</p>
+     *
+     * @param yaw   偏航角（度）
+     * @param pitch 俯仰角（度）
+     */
+    @ApiStatus.Internal
+    public void setHeadRotation(float yaw, float pitch) {
+        synchronized (this) {
+            controller.updateHeadRotation(yaw, pitch);
+        }
     }
 }
