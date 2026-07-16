@@ -134,9 +134,9 @@ public final class VisibilityTracker implements Listener {
                 ((NpcImpl) npc).hideFrom(player);
                 continue;
             }
-            // 距离判断（同世界，distance 安全）
-            double dist = playerLoc.distance(npcLoc);
-            if (dist <= data.visibilityDistance()) {
+            // 距离判断（用 distanceSquared 避免平方根开销）
+            double visDist = data.visibilityDistance();
+            if (playerLoc.distanceSquared(npcLoc) <= visDist * visDist) {
                 ((NpcImpl) npc).showTo(player);
             } else {
                 ((NpcImpl) npc).hideFrom(player);
