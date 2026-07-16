@@ -1,9 +1,9 @@
 package com.oolongho.woonpc.npc;
 
 import com.oolongho.woonpc.api.NpcData;
+import com.oolongho.woonpc.hologram.DisplayNameRenderer;
 import com.oolongho.woonpc.nms.NmsAdapter;
 import com.oolongho.woonpc.nms.NmsAdapterFactory;
-import com.oolongho.woonpc.nms.dto.NpcDisplayNameData;
 import com.oolongho.woonpc.nms.dto.NpcEquipmentData;
 import com.oolongho.woonpc.nms.dto.NpcMetadataData;
 import com.oolongho.woonpc.nms.dto.NpcSpawnData;
@@ -35,25 +35,23 @@ import java.util.concurrent.ConcurrentHashMap;
  * <h2>架构定位</h2>
  * <pre>
  *   Npc (public API) ──持有──&gt; NpcController (internal) ──委托──&gt; NmsAdapter (version-specific)
+ *                                       │
+ *                                       └──持有──&gt; DisplayNameRenderer (TextDisplay 头顶显示名)
  * </pre>
  *
  * <p>NpcController <b>不持有</b> NpcData，而是在每次方法调用时接收 NpcData 作为参数。
  * NpcData 由 {@link com.oolongho.woonpc.api.Npc} 持有，NpcController 是 Npc 的内部委托对象。</p>
+ *
+ * <h2>显示名渲染</h2>
+ * <p>头顶 TextDisplay 由独立的 {@link DisplayNameRenderer} 管理，包括 spawn/despawn/文本更新/位置跟随。
+ * NpcController 在 {@link #spawn}/{@link #despawn}/{@link #updateLocation}/{@link #updateDisplayName}
+ * 节点委托 renderer 完成显示名同步，避免 TextDisplay 客户端实体泄漏与位置不同步。</p>
  *
  * <h2>线程安全</h2>
  * <ul>
  *   <li>所有方法必须在主线程调用（PlayerConnection 非线程安全）</li>
  *   <li>{@link #visiblePlayers} 使用 {@link ConcurrentHashMap#newKeySet()} 支持并发读写</li>
  *   <li>遍历可见玩家时通过 {@link Bukkit#getPlayer(UUID)} 解析，离线玩家自动跳过</li>
- * </ul>
- *
- * <h2>实现状态</h2>
- * <ul>
- *   <li>{@link #spawn} / {@link #despawn} / {@link #updateLocation} / {@link #updateEquipment} /
- *       {@link #updateHeadRotation} / {@link #moveTo} / {@link #updateMetadata} /
- *       {@link #updateDisplayName}：完整实现，调用 NmsAdapter</li>
- *   <li>{@link #followPath}：Phase 2 预留接口，抛 {@link UnsupportedOperationException}</li>
- *   <li>显示名通过独立的 TextDisplay 实体实现，{@code displayEntityId} 在构造时预分配（final 字段）</li>
  * </ul>
  *
  * @author oolongho
@@ -76,15 +74,15 @@ public final class NpcController {
     /** 可见玩家集合（UUID），并发安全 */
     private final Set<UUID> visiblePlayers;
 
-    /** 显示名 TextDisplay 实体 ID（构造时预分配，避免懒分配竞态） */
-    private final int displayEntityId;
+    /** 头顶显示名渲染器（独立 TextDisplay 实体的全生命周期管理） */
+    private final DisplayNameRenderer displayNameRenderer;
 
     /**
      * 构造控制器。
      *
-     * <p>构造时从 {@link EntityIdGenerator} 分配 entityId 与 displayEntityId，并从
+     * <p>构造时从 {@link EntityIdGenerator} 分配 entityId，并从
      * {@link NmsAdapterFactory} 获取对应版本的 {@link NmsAdapter}。
-     * Task 4 未完成时工厂抛异常。</p>
+     * {@link DisplayNameRenderer} 同步构造（其内部预分配 displayEntityId）。</p>
      *
      * @param uuid     NPC 的 UUID，不可为 null
      * @param username GameProfile 玩家名，不可为 null 或空白
@@ -92,8 +90,6 @@ public final class NpcController {
      */
     public NpcController(UUID uuid, String username) {
         this.entityId = EntityIdGenerator.nextEntityId();
-        // 构造时预分配 displayEntityId，避免 updateDisplayName 首次调用时的 check-then-set 竞态
-        this.displayEntityId = EntityIdGenerator.nextEntityId();
         this.uuid = Objects.requireNonNull(uuid, "uuid cannot be null");
         this.username = Objects.requireNonNull(username, "username cannot be null");
         if (username.isBlank()) {
@@ -101,6 +97,7 @@ public final class NpcController {
         }
         this.adapter = NmsAdapterFactory.createAdapter(VersionUtil.getServerVersion());
         this.visiblePlayers = ConcurrentHashMap.newKeySet();
+        this.displayNameRenderer = new DisplayNameRenderer();
     }
 
     // ==================== 生命周期：生成 / 销毁 ====================
@@ -111,6 +108,9 @@ public final class NpcController {
      * <p>将 {@link NpcData} 转换为 {@link NpcSpawnData}，委托
      * {@link NmsAdapter#spawnPlayer} 发包。皮肤通过 {@link com.oolongho.woonpc.skin.SkinData#toNpcTexture()}
      * 转换：默认皮肤传 null 触发服务端 Steve。</p>
+     *
+     * <p>spawn 完成后委托 {@link DisplayNameRenderer#showTo} 发送头顶 TextDisplay
+     * （若 {@code data.displayName() != null}）。</p>
      *
      * @param player 目标玩家
      * @param data   NPC 数据快照
@@ -136,12 +136,15 @@ public final class NpcController {
                 data.showInTab()
         );
         adapter.spawnPlayer(player, spawnData);
+        // 同步头顶 TextDisplay 显示名（独立实体，由 DisplayNameRenderer 管理）
+        displayNameRenderer.showTo(player, data);
     }
 
     /**
      * 向单个玩家发送 despawn 包，并将其移出可见集合。
      *
-     * <p>若玩家不在可见集合中，直接返回（幂等）。</p>
+     * <p>同时委托 {@link DisplayNameRenderer#hideFrom} 销毁该玩家客户端的 TextDisplay 实体。
+     * 若玩家不在可见集合中，直接返回（幂等）。</p>
      *
      * @param player 目标玩家
      * @throws NullPointerException 当 player 为 null
@@ -152,16 +155,20 @@ public final class NpcController {
             return;
         }
         adapter.despawn(player, entityId, uuid);
+        displayNameRenderer.hideFrom(player);
     }
 
     /**
      * 向所有可见玩家发送 despawn 包，并清空可见集合。
+     *
+     * <p>同时委托 {@link DisplayNameRenderer#hideFromAll} 销毁所有玩家的 TextDisplay 实体。</p>
      */
     public void despawnAll() {
         for (UUID playerId : visiblePlayers) {
             Player player = Bukkit.getPlayer(playerId);
             if (player != null && player.isOnline()) {
                 adapter.despawn(player, entityId, uuid);
+                displayNameRenderer.hideFrom(player);
             }
         }
         visiblePlayers.clear();
@@ -193,6 +200,9 @@ public final class NpcController {
     /**
      * 更新位置（瞬移）到所有可见玩家。
      *
+     * <p>同时委托 {@link DisplayNameRenderer#updateLocation} 同步 TextDisplay 位置
+     * （TextDisplay 是独立实体，不会跟随 NPC 的 teleport 包移动）。</p>
+     *
      * @param location 新位置
      * @throws NullPointerException 当 location 为 null
      */
@@ -202,6 +212,7 @@ public final class NpcController {
             Player player = Bukkit.getPlayer(playerId);
             if (player != null && player.isOnline()) {
                 adapter.updateLocation(player, entityId, location, true);
+                displayNameRenderer.updateLocation(player, location);
             }
         }
     }
@@ -246,23 +257,21 @@ public final class NpcController {
     }
 
     /**
-     * 更新头顶显示名。
+     * 更新头顶显示名文本。
      *
-     * <p>{@code displayEntityId} 在 {@link #NpcController 构造时} 已预分配（TextDisplay 实体 ID），
-     * 此方法仅复用该 ID 更新文本内容。显示名实体定位在 NPC 头顶 Y+2.0 处。</p>
+     * <p>委托 {@link DisplayNameRenderer#updateText} 发送 SetEntityData 更新 TextDisplay
+     * 的 DATA_TEXT_ID 字段。若 {@code data.displayName() == null}，renderer 内部会卸载
+     * 已激活的 TextDisplay 实体。</p>
      *
      * @param data NPC 数据快照
      * @throws NullPointerException 当 data 为 null
      */
     public void updateDisplayName(NpcData data) {
         Objects.requireNonNull(data, "data cannot be null");
-        Location displayNameLoc = data.location().clone().add(0, 2.0, 0);
-        var displayNameData = new NpcDisplayNameData(
-                displayEntityId, data.displayName(), displayNameLoc);
         for (UUID playerId : visiblePlayers) {
             Player player = Bukkit.getPlayer(playerId);
             if (player != null && player.isOnline()) {
-                adapter.sendDisplayName(player, displayNameData);
+                displayNameRenderer.updateText(player, data);
             }
         }
     }
@@ -338,5 +347,19 @@ public final class NpcController {
     public boolean isVisible(Player player) {
         Objects.requireNonNull(player, "player cannot be null");
         return visiblePlayers.contains(player.getUniqueId());
+    }
+
+    /**
+     * 获取头顶显示名渲染器。
+     *
+     * <p>供 {@link com.oolongho.woonpc.npc.NpcImpl} 在 {@code DISPLAY_NAME} dirty 时
+     * 直接调用 {@link DisplayNameRenderer#updateText} 增量更新文本，
+     * 无需经过本控制器的 {@link #updateDisplayName} 全量遍历。</p>
+     *
+     * @return 显示名渲染器实例
+     */
+    @ApiStatus.Internal
+    public DisplayNameRenderer getDisplayNameRenderer() {
+        return displayNameRenderer;
     }
 }
