@@ -1,0 +1,28 @@
+# WooNPCs 中文语言文件
+# Chinese language file for WooNPCs
+# 颜色码统一使用 MiniMessage 标签（如 <red>/<green>），与 Adventure Component 一致，由 Task 16 MessageManager 渲染
+# 占位符统一使用 {name} 风格：{prefix} 为前缀，{...} 为运行时变量
+
+prefix: "<dark_gray>[<aqua>WooNPCs<dark_gray>] <reset>"
+
+# 通用消息
+general:
+  no-permission: "{prefix}<red>你没有权限执行此操作。"
+  player-only: "{prefix}<red>该命令只能由玩家执行。"
+  reload-success: "{prefix}<green>配置已重载。"
+
+# NPC 相关消息
+npc:
+  create-success: "{prefix}<green>NPC <yellow>{name} <green>已创建。"
+  not-found: "{prefix}<red>找不到名为 <yellow>{name} <red>的 NPC。"
+  already-exists: "{prefix}<red>名为 <yellow>{name} <red>的 NPC 已存在。"
+  remove-success: "{prefix}<green>NPC <yellow>{name} <green>已移除。"
+
+# 命令相关消息
+command:
+  usage: "{prefix}<gray>用法: /woonpc <create|remove|list|...>"
+
+# GUI 相关消息
+gui:
+  title-list: "<dark_gray>WooNPCs 列表 <gray>(第 {page}/{total} 页)"
+  title-detail: "<dark_gray>NPC: <yellow>{name}"

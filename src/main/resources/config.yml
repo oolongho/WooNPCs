@@ -1,0 +1,38 @@
+# WooNPCs 配置文件
+# Configuration file for WooNPCs
+
+# 基本设置
+settings:
+  # 是否启用调试模式（输出详细日志）
+  debug: false
+  # 自动保存间隔（秒），0 表示禁用自动保存；默认 5 分钟
+  auto-save-interval: 300
+
+# 追踪器设置
+tracker:
+  # 可见性追踪器扫描间隔（tick），VisibilityTracker 用，建议不要低于 10
+  tracker-interval: 20
+  # 头部朝向追踪器插值间隔（tick），LookTracker 用，越小越平滑但越耗性能
+  look-tracker-interval: 2
+
+# 默认 NPC 设置
+defaults:
+  # 默认可见距离（方块）
+  default-visibility-distance: 32.0
+  # 默认头部跟随玩家的距离（方块）
+  default-turn-to-player-distance: 5.0
+  # 默认是否头部转向玩家
+  default-turn-to-player: true
+  # 默认是否在 Tab 列表显示（仅用于 spawn 流程的 PlayerInfo 包，通常 false）
+  default-show-in-tab: false
+  # 默认交互冷却（毫秒），0 表示无冷却
+  default-interaction-cooldown: 0
+
+# 皮肤设置
+skin:
+  # Mojang API 请求超时（毫秒）
+  mojang-timeout: 5000
+  # MineSkin API Key（可选，留空则使用限速模式）
+  mineskin-api-key: ''
+  # 皮肤 LRU 缓存大小
+  cache-memory-size: 100
