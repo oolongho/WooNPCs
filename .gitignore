@@ -31,3 +31,4 @@ Thumbs.db
 *.log
 *.jar
 !gradle-wrapper.jar
+.oolongho/
