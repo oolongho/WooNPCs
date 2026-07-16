@@ -123,6 +123,19 @@ public final class NpcImpl extends Npc {
         }
     }
 
+    /**
+     * 静默销毁客户端实体（不触发 NpcDespawnEvent）。
+     *
+     * <p>供 {@link NpcManagerImpl#remove} 使用：remove 是不可取消的强制操作，
+     * 不应触发可取消的 NpcDespawnEvent。直接调用 controller.despawnAll() 销毁所有客户端实体。</p>
+     */
+    @ApiStatus.Internal
+    public void despawnSilent() {
+        synchronized (this) {
+            controller.despawnAll();
+        }
+    }
+
     @Override
     public void remove() {
         manager.remove(getId());
@@ -137,16 +150,18 @@ public final class NpcImpl extends Npc {
                 return;
             }
 
-            // LOCATION：瞬移包
-            if (dirty.contains(NpcField.LOCATION)) {
+            boolean skinDirty = dirty.contains(NpcField.SKIN);
+
+            // LOCATION：瞬移包（SKIN dirty 时跳过，spawn 会重发）
+            if (!skinDirty && dirty.contains(NpcField.LOCATION)) {
                 controller.updateLocation(snapshot.location());
             }
-            // DISPLAY_NAME：更新 TextDisplay 文本
-            if (dirty.contains(NpcField.DISPLAY_NAME)) {
+            // DISPLAY_NAME：更新 TextDisplay 文本（SKIN dirty 时跳过，spawn 会重发）
+            if (!skinDirty && dirty.contains(NpcField.DISPLAY_NAME)) {
                 controller.updateDisplayName(snapshot);
             }
             // SKIN：皮肤纹理变更，需重新 spawn（despawnAll + spawn）
-            if (dirty.contains(NpcField.SKIN)) {
+            if (skinDirty) {
                 controller.despawnAll();
                 for (UUID playerId : targetViewers) {
                     Player player = Bukkit.getPlayer(playerId);
@@ -159,10 +174,12 @@ public final class NpcImpl extends Npc {
             if (dirty.contains(NpcField.EQUIPMENT)) {
                 controller.updateEquipment(snapshot.equipment());
             }
-            // GLOW_COLOR / POSE / SCALE / EFFECTS / SHOW_IN_TAB / COLLIDABLE：合并为元数据包
+            // GLOW_COLOR / POSE / SCALE / EFFECTS / COLLIDABLE：合并为元数据包
+            // 注意：SHOW_IN_TAB 是 PlayerInfo 层属性（UPDATE_LISTED），非 entity metadata，
+            // 运行时切换需单独发包，暂未实现（TODO Task 7+）
             if (dirty.contains(NpcField.GLOW_COLOR) || dirty.contains(NpcField.POSE)
                     || dirty.contains(NpcField.SCALE) || dirty.contains(NpcField.EFFECTS)
-                    || dirty.contains(NpcField.SHOW_IN_TAB) || dirty.contains(NpcField.COLLIDABLE)) {
+                    || dirty.contains(NpcField.COLLIDABLE)) {
                 controller.updateMetadata(snapshot);
             }
             // TURN_TO_PLAYER / TURN_TO_PLAYER_DISTANCE / VISIBILITY_DISTANCE / VISIBILITY_PERMISSIONS / INTERACTION_COOLDOWN：

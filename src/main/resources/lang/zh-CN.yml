@@ -1,7 +1,5 @@
 # WooNPCs 中文语言文件
 # Chinese language file for WooNPCs
-# 颜色码统一使用 MiniMessage 标签（如 <red>/<green>），与 Adventure Component 一致，由 Task 16 MessageManager 渲染
-# 占位符统一使用 {name} 风格：{prefix} 为前缀，{...} 为运行时变量
 
 prefix: "<dark_gray>[<aqua>WooNPCs<dark_gray>] <reset>"
 

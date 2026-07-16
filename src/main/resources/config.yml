@@ -35,4 +35,4 @@ skin:
   # MineSkin API Key（可选，留空则使用限速模式）
   mineskin-api-key: ''
   # 皮肤 LRU 缓存大小
-  cache-memory-size: 100
+  cache-memory-size: 1000
