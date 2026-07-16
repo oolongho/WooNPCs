@@ -1,0 +1,217 @@
+package com.oolongho.woonpc.api;
+
+import com.oolongho.woonpc.npc.ClickType;
+import com.oolongho.woonpc.npc.NpcController;
+import org.bukkit.Location;
+import org.bukkit.entity.Player;
+import org.jetbrains.annotations.ApiStatus;
+
+import java.util.Objects;
+import java.util.UUID;
+
+// 注：org.jetbrains.annotations.ApiStatus 无 Public 子注解，
+// 公共 API 默认不加 @ApiStatus 注解（仅 Internal/Experimental 等才标记）。
+
+/**
+ * NPC 抽象基类（公共 API）。
+ *
+ * <p>定义一个数据包 NPC 的生命周期契约与状态访问接口。持有 {@link NpcData}（数据快照）
+ * 与 {@link NpcController}（包发送委托），具体生命周期实现由子类（{@code NpcImpl}，Task 5）
+ * 结合 {@code Tracker}、{@code ActionManager} 等组件完成。</p>
+ *
+ * <h2>架构关系</h2>
+ * <pre>
+ *   Npc (abstract, public API)
+ *     ├─ NpcData          (immutable snapshot + dirty fields)
+ *     └─ NpcController    (internal, delegates to NmsAdapter)
+ *           └─ NmsAdapter (version-specific packet sending)
+ * </pre>
+ *
+ * <h2>生命周期方法</h2>
+ * <ul>
+ *   <li>{@link #spawn()}：对当前可见玩家发送 spawn 包（首次生成或重新显示）</li>
+ *   <li>{@link #despawn()}：对所有可见玩家发送 despawn 包（不移除 NPC，可再次 spawn）</li>
+ *   <li>{@link #remove()}：despawn + 从 NpcManager 注销（Task 5 实现）</li>
+ *   <li>{@link #update()}：增量同步 dirty 字段到可见玩家（NpcController 按 dirty 决定发包）</li>
+ *   <li>{@link #moveTo(Location)}：移动到新位置（Phase 1 瞬移，Phase 2 平滑路径）</li>
+ *   <li>{@link #lookAt(Location)}：头部朝向目标位置</li>
+ *   <li>{@link #interact(Player, ClickType)}：触发交互事件 + 执行动作集合（Task 9 实现）</li>
+ * </ul>
+ *
+ * <h2>线程安全</h2>
+ * <p>所有生命周期方法必须在主线程调用（数据包发送非线程安全）。
+ * {@link #data} 字段由子类通过 {@code synchronized} 或 {@code volatile} 保护。</p>
+ *
+ * @author oolongho
+ */
+public abstract class Npc {
+
+    /** NPC 数据快照（可变，子类通过 {@code data = data.withXxx(...)} 更新） */
+    protected NpcData data;
+
+    /** 包发送委托控制器（不可变，构造时确定） */
+    protected final NpcController controller;
+
+    /**
+     * 构造 NPC。
+     *
+     * @param data       初始数据快照，不可为 null
+     * @param controller 包发送控制器，不可为 null
+     * @throws NullPointerException 当 data 或 controller 为 null
+     */
+    protected Npc(NpcData data, NpcController controller) {
+        this.data = Objects.requireNonNull(data, "data cannot be null");
+        this.controller = Objects.requireNonNull(controller, "controller cannot be null");
+        if (!data.id().equals(controller.getUuid())) {
+            throw new IllegalArgumentException("data.id (" + data.id()
+                    + ") must match controller.uuid (" + controller.getUuid() + ")");
+        }
+    }
+
+    // ==================== 数据访问（委托给 NpcData） ====================
+
+    /**
+     * 获取 NPC 数据快照。
+     *
+     * <p>返回当前 {@link #data} 引用，调用方不应修改。如需安全副本，
+     * 可调用 {@link NpcData#cleanCopy()} 或对应 {@code withXxx} 方法。</p>
+     *
+     * @return 当前数据快照
+     */
+    public NpcData getData() {
+        return data;
+    }
+
+    /**
+     * 获取 NPC 唯一标识。
+     *
+     * @return UUID
+     */
+    public UUID getId() {
+        return data.id();
+    }
+
+    /**
+     * 获取 NPC 名称。
+     *
+     * @return 名称
+     */
+    public String getName() {
+        return data.name();
+    }
+
+    /**
+     * 获取 NPC 当前位置（返回 clone，修改不影响内部状态）。
+     *
+     * @return 位置副本
+     */
+    public Location getLocation() {
+        return data.location();
+    }
+
+    /**
+     * 获取包发送控制器（内部使用）。
+     *
+     * <p>子类通过此方法访问 {@link NpcController} 发送数据包。
+     * 外部不应直接调用此方法。</p>
+     *
+     * @return 控制器实例
+     */
+    @ApiStatus.Internal
+    protected final NpcController getController() {
+        return controller;
+    }
+
+    // ==================== 生命周期方法（抽象，由子类实现） ====================
+
+    /**
+     * 生成 NPC：对当前可见玩家发送 spawn 包。
+     *
+     * <p>首次生成或 {@link #despawn()} 后重新显示时调用。
+     * 实现应通过 {@code Tracker}（Task 6）确定可见玩家集合，
+     * 委托 {@link NpcController#spawn} 发包。</p>
+     *
+     * @throws com.oolongho.woonpc.nms.util.WooNPCsException 当 NmsAdapter 未就绪（Task 4 未完成）
+     */
+    public abstract void spawn();
+
+    /**
+     * 销毁 NPC 显示：对所有可见玩家发送 despawn 包。
+     *
+     * <p>仅移除客户端实体，不从 {@code NpcManager} 注销。
+     * 可通过 {@link #spawn()} 重新显示。</p>
+     */
+    public abstract void despawn();
+
+    /**
+     * 移除 NPC：despawn + 从 NpcManager 注销。
+     *
+     * <p>调用后此 NPC 实例不再可用，不应再次调用生命周期方法。
+     * Task 5 由 {@code NpcManager.removeNpc} 实现具体注销逻辑。</p>
+     */
+    public abstract void remove();
+
+    /**
+     * 增量同步 dirty 字段到可见玩家。
+     *
+     * <p>依据 {@link NpcData#dirtyFields()} 决定发送哪些更新包：
+     * 如 DISPLAY_NAME dirty 则更新显示名，EQUIPMENT dirty 则更新装备等。
+     * 同步完成后应将 {@link #data} 替换为 {@link NpcData#cleanCopy()}。</p>
+     */
+    public abstract void update();
+
+    /**
+     * 移动 NPC 到新位置。
+     *
+     * <p><b>Phase 1</b>：瞬移（直接发送 {@code TeleportEntityPacket}）。
+     * <b>Phase 2</b>：平滑路径跟随（{@code followPath}，预留接口）。</p>
+     *
+     * <p>实现应同时更新 {@link #data} 的 location 字段（通过 {@link NpcData#withLocation}），
+     * 并触发 {@link NpcController#moveTo} 发包。</p>
+     *
+     * @param location 新位置，不可为 null
+     */
+    public abstract void moveTo(Location location);
+
+    /**
+     * 头部朝向目标位置。
+     *
+     * <p>计算当前位置到目标的方向向量，转换为 yaw/pitch，
+     * 委托 {@link NpcController#updateHeadRotation} 发包。
+     * 不改变 {@link #data} 的 location 字段（仅头部朝向）。</p>
+     *
+     * @param target 目标位置，不可为 null
+     */
+    public abstract void lookAt(Location target);
+
+    /**
+     * 处理玩家交互。
+     *
+     * <p>触发 {@code NpcInteractEvent}（Task 12），未取消时执行该 ClickType 对应的
+     * 动作集合（Task 9 {@code ActionManager}）。同时检查 {@link NpcData#interactionCooldown}
+     * 防止短时间重复触发。</p>
+     *
+     * @param player    交互的玩家
+     * @param clickType 点击类型
+     */
+    public abstract void interact(Player player, ClickType clickType);
+
+    // ==================== Object 方法 ====================
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof Npc npc)) return false;
+        return data.id().equals(npc.data.id());
+    }
+
+    @Override
+    public int hashCode() {
+        return data.id().hashCode();
+    }
+
+    @Override
+    public String toString() {
+        return "Npc{id=" + data.id() + ", name='" + data.name() + "', location=" + data.location() + "}";
+    }
+}
