@@ -259,9 +259,16 @@ public final class NpcController {
     /**
      * 更新头顶显示名文本。
      *
-     * <p>委托 {@link DisplayNameRenderer#updateText} 发送 SetEntityData 更新 TextDisplay
-     * 的 DATA_TEXT_ID 字段。若 {@code data.displayName() == null}，renderer 内部会卸载
-     * 已激活的 TextDisplay 实体。</p>
+     * <p>委托 {@link DisplayNameRenderer#showTo} 完成显示名同步。{@code showTo} 自适应三种场景：</p>
+     * <ul>
+     *   <li>{@code displayName == null}：调 {@link DisplayNameRenderer#hideFrom} 卸载已激活的 TextDisplay</li>
+     *   <li>已激活：转 {@link DisplayNameRenderer#updateText} 仅发送 SetEntityData 更新文本</li>
+     *   <li>未激活且 {@code displayName != null}：发送 AddEntity + SetEntityData 创建 TextDisplay</li>
+     * </ul>
+     *
+     * <p>使用 {@code showTo} 而非 {@code updateText} 是为了修复 displayName 从 null → 非 null 切换时，
+     * 玩家已在 visiblePlayers 但未在 activeViewers 中（首次 spawn 时 displayName 为 null 走 hideFrom 早退分支），
+     * 导致 updateText 因 activeViewers 不含该玩家而早退、TextDisplay 永不创建的问题。</p>
      *
      * @param data NPC 数据快照
      * @throws NullPointerException 当 data 为 null
@@ -271,7 +278,7 @@ public final class NpcController {
         for (UUID playerId : visiblePlayers) {
             Player player = Bukkit.getPlayer(playerId);
             if (player != null && player.isOnline()) {
-                displayNameRenderer.updateText(player, data);
+                displayNameRenderer.showTo(player, data);
             }
         }
     }
@@ -347,19 +354,5 @@ public final class NpcController {
     public boolean isVisible(Player player) {
         Objects.requireNonNull(player, "player cannot be null");
         return visiblePlayers.contains(player.getUniqueId());
-    }
-
-    /**
-     * 获取头顶显示名渲染器。
-     *
-     * <p>供 {@link com.oolongho.woonpc.npc.NpcImpl} 在 {@code DISPLAY_NAME} dirty 时
-     * 直接调用 {@link DisplayNameRenderer#updateText} 增量更新文本，
-     * 无需经过本控制器的 {@link #updateDisplayName} 全量遍历。</p>
-     *
-     * @return 显示名渲染器实例
-     */
-    @ApiStatus.Internal
-    public DisplayNameRenderer getDisplayNameRenderer() {
-        return displayNameRenderer;
     }
 }

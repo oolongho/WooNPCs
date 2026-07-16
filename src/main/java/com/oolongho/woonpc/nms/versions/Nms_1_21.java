@@ -2,7 +2,6 @@ package com.oolongho.woonpc.nms.versions;
 
 import com.oolongho.woonpc.nms.NmsAdapter;
 import com.oolongho.woonpc.nms.dto.MetadataEntry;
-import com.oolongho.woonpc.nms.dto.NpcDisplayNameData;
 import com.oolongho.woonpc.nms.dto.NpcEquipmentData;
 import com.oolongho.woonpc.nms.dto.NpcMetadataData;
 import com.oolongho.woonpc.nms.dto.NpcSpawnData;
@@ -15,7 +14,6 @@ import org.bukkit.entity.Player;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.Nullable;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -44,7 +42,6 @@ import java.util.UUID;
  *   <li>updateEquipment：SetEquipment</li>
  *   <li>updateHeadRotation：RotateHead</li>
  *   <li>sendTabRemove：PlayerInfo(UPDATE_LISTED, listed=false)</li>
- *   <li>sendDisplayName：AddEntity(TextDisplay) + SetEntityData(text)</li>
  * </ul>
  *
  * <h2>子类覆盖点</h2>
@@ -61,12 +58,6 @@ import java.util.UUID;
  */
 @ApiStatus.Internal
 public class Nms_1_21 implements NmsAdapter {
-
-    /** TextDisplay 文本内容的 DataWatcher 索引（1.21+） */
-    private static final int TEXT_DISPLAY_TEXT_INDEX = 23;
-
-    /** TextDisplay 文本的序列化器 ID（Component = 4） */
-    private static final int SER_COMPONENT = 4;
 
     /** GameProfile 反射类缓存（供 createGameProfile 钩子方法使用） */
     protected static final Class<?> GAME_PROFILE_CLASS =
@@ -143,24 +134,6 @@ public class Nms_1_21 implements NmsAdapter {
         Object gameProfile = createGameProfile(uuid, "", null);
         Object packet = PacketFactory.createPlayerInfoUpdateListedPacket(uuid, gameProfile, false);
         PacketFactory.sendPacket(player, packet);
-    }
-
-    @Override
-    public void sendDisplayName(Player player, NpcDisplayNameData data) {
-        // 生成 TextDisplay 实体
-        UUID displayUuid = UUID.randomUUID();
-        Object spawnPacket = PacketFactory.createAddTextDisplayPacket(
-                data.displayEntityId(), displayUuid, data.location());
-
-        // 构建文本元数据（DataWatcher 索引 23 = Component 文本）
-        List<MetadataEntry> entries = new ArrayList<>(1);
-        Object textComponent = data.displayName() != null
-                ? PacketFactory.createComponent(data.displayName())
-                : PacketFactory.createComponent("");
-        entries.add(new MetadataEntry(TEXT_DISPLAY_TEXT_INDEX, SER_COMPONENT, textComponent));
-        Object metadataPacket = PacketFactory.createMetadataPacket(data.displayEntityId(), entries);
-
-        PacketFactory.sendPackets(player, List.of(spawnPacket, metadataPacket));
     }
 
     @Override

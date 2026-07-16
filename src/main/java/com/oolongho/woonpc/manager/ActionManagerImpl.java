@@ -18,11 +18,13 @@ import com.oolongho.woonpc.api.actions.NpcAction;
 import com.oolongho.woonpc.npc.ClickType;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
+import org.bukkit.scheduler.BukkitTask;
 import org.jetbrains.annotations.ApiStatus;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
@@ -38,6 +40,8 @@ import java.util.function.Function;
  *       — 每个 NPC 在每个 trigger 下绑定的有序动作列表</li>
  *   <li>{@code cooldowns}：{@code Map<CoolDownKey, Long expiryMillis>}
  *       — per-trigger per-player 冷却，key = (npcId, playerId, trigger)，value = 到期时间戳</li>
+ *   <li>{@code pendingTasks}：{@code Map<npcId, Set<BukkitTask>>}
+ *       — 由 {@link NpcAction#delayTicks()} 调度的延迟任务集合，{@link #clearNpc} 时统一取消</li>
  *   <li>{@code factories}：{@code Map<typeId, factory>}
  *       — 从配置 Map 反序列化动作的工厂</li>
  * </ul>
@@ -80,6 +84,9 @@ public final class ActionManagerImpl implements ActionManager {
 
     /** 冷却存储：(npcId, playerId, trigger) -> 到期时间戳（毫秒） */
     private final Map<CoolDownKey, Long> cooldowns = new ConcurrentHashMap<>();
+
+    /** 延迟任务存储：npcId -> 已调度的 BukkitTask 集合，clearNpc 时统一取消 */
+    private final Map<UUID, Set<BukkitTask>> pendingTasks = new ConcurrentHashMap<>();
 
     /** 反序列化工厂：typeId -> factory */
     private final Map<String, Function<Map<String, String>, NpcAction>> factories = new ConcurrentHashMap<>();
@@ -124,6 +131,11 @@ public final class ActionManagerImpl implements ActionManager {
         Objects.requireNonNull(npcId, "npcId cannot be null");
         actionsByNpc.remove(npcId);
         cooldowns.keySet().removeIf(k -> k.npcId.equals(npcId));
+        // 取消所有由 WaitAction 调度的延迟任务，防止 NPC 删除后副作用 action 继续执行
+        Set<BukkitTask> tasks = pendingTasks.remove(npcId);
+        if (tasks != null) {
+            tasks.forEach(BukkitTask::cancel);
+        }
     }
 
     @Override
@@ -157,7 +169,9 @@ public final class ActionManagerImpl implements ActionManager {
             return;
         }
         long cd = npc.getData().interactionCooldown();
-        cooldowns.put(key, now + cd);
+        if (cd > 0) {
+            cooldowns.put(key, now + cd);
+        }
 
         // 执行动作链
         ActionContext context = new ActionContext(player, npc, clickType, plugin);
@@ -171,17 +185,41 @@ public final class ActionManagerImpl implements ActionManager {
      * 通过 {@link org.bukkit.scheduler.BukkitScheduler#runTaskLater} 延迟指定 tick 后
      * 调用本方法继续执行 {@code index + 1} 起的部分。</p>
      *
+     * <h3>安全防护</h3>
+     * <ul>
+     *   <li>入口校验玩家在线：延迟期间玩家下线则中止整链（防止下线后副作用 action 执行）</li>
+     *   <li>延迟任务登记到 {@link #pendingTasks}：NPC 删除时 {@link #clearNpc} 统一取消</li>
+     *   <li>任务执行完从集合移除：避免长期积累已完成 task 引用</li>
+     * </ul>
+     *
      * @param actions 动作列表
      * @param index   当前执行起点
      * @param context 上下文（同一个交互内共享）
      */
     private void executeChain(List<NpcAction> actions, int index, ActionContext context) {
+        // 玩家下线则中止整链（防止延迟期间玩家下线后继续执行副作用 action）
+        if (!context.player().isOnline()) {
+            return;
+        }
         for (int i = index; i < actions.size(); i++) {
             NpcAction action = actions.get(i);
             int delay = action.delayTicks();
             if (delay > 0) {
                 int next = i + 1;
-                Bukkit.getScheduler().runTaskLater(plugin, () -> executeChain(actions, next, context), delay);
+                UUID npcId = context.npc().getId();
+                // holder 数组解决 lambda 自引用：task 需在回调内从 pendingTasks 移除自己
+                final BukkitTask[] holder = new BukkitTask[1];
+                holder[0] = Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                    try {
+                        executeChain(actions, next, context);
+                    } finally {
+                        Set<BukkitTask> set = pendingTasks.get(npcId);
+                        if (set != null) {
+                            set.remove(holder[0]);
+                        }
+                    }
+                }, delay);
+                pendingTasks.computeIfAbsent(npcId, k -> ConcurrentHashMap.newKeySet()).add(holder[0]);
                 return;
             }
             if (!action.execute(context)) {
@@ -233,13 +271,31 @@ public final class ActionManagerImpl implements ActionManager {
         registerActionType("message", a -> new MessageAction(a.getOrDefault("message", "")));
         registerActionType("play_sound", a -> new PlaySoundAction(
                 a.getOrDefault("sound", "BLOCK_NOTE_BLOCK_HAT"),
-                Float.parseFloat(a.getOrDefault("volume", "1.0")),
-                Float.parseFloat(a.getOrDefault("pitch", "1.0"))));
+                parseFloatSafe(a.getOrDefault("volume", "1.0"), 1.0f),
+                parseFloatSafe(a.getOrDefault("pitch", "1.0"), 1.0f)));
         registerActionType("player_command", a -> new PlayerCommandAction(a.getOrDefault("command", "")));
         registerActionType("player_command_as_op", a -> new PlayerCommandAsOpAction(a.getOrDefault("command", "")));
-        registerActionType("wait", a -> new WaitAction(Integer.parseInt(a.getOrDefault("ticks", "20"))));
+        registerActionType("wait", a -> new WaitAction(parseIntSafe(a.getOrDefault("ticks", "20"), 20)));
         registerActionType("need_permission", a -> new NeedPermissionAction(a.getOrDefault("permission", "")));
         registerActionType("execute_random", a -> new ExecuteRandomAction(List.of()));
         registerActionType("send_to_server", a -> new SendToServerAction(a.getOrDefault("server", "")));
+    }
+
+    /** 安全解析 float：格式错误时回退到默认值（防止配置错误导致整组 actions 加载失败） */
+    private static float parseFloatSafe(String s, float def) {
+        try {
+            return Float.parseFloat(s);
+        } catch (NumberFormatException e) {
+            return def;
+        }
+    }
+
+    /** 安全解析 int：格式错误时回退到默认值 */
+    private static int parseIntSafe(String s, int def) {
+        try {
+            return Integer.parseInt(s);
+        } catch (NumberFormatException e) {
+            return def;
+        }
     }
 }

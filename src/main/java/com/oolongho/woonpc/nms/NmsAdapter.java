@@ -1,6 +1,5 @@
 package com.oolongho.woonpc.nms;
 
-import com.oolongho.woonpc.nms.dto.NpcDisplayNameData;
 import com.oolongho.woonpc.nms.dto.NpcEquipmentData;
 import com.oolongho.woonpc.nms.dto.NpcMetadataData;
 import com.oolongho.woonpc.nms.dto.NpcSpawnData;
@@ -119,17 +118,6 @@ public interface NmsAdapter {
      * @param uuid     NPC 的 UUID
      */
     void sendTabRemove(Player player, int entityId, UUID uuid);
-
-    /**
-     * 向指定玩家发送/更新 NPC 头顶显示名。
-     *
-     * <p>内部通过 TextDisplay 实体跟随 NPC，或直接更新玩家实体的 custom_name。
-     * 首次调用时生成 TextDisplay，后续调用更新其 custom_name。</p>
-     *
-     * @param player 目标玩家
-     * @param data   显示名数据
-     */
-    void sendDisplayName(Player player, NpcDisplayNameData data);
 
     /**
      * 获取本适配器支持的 Minecraft 版本标识（如 {@code "1.21.5"}）。

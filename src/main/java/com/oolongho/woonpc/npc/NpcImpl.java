@@ -6,6 +6,7 @@ import com.oolongho.woonpc.api.NpcField;
 import com.oolongho.woonpc.event.NpcDespawnEvent;
 import com.oolongho.woonpc.event.NpcInteractEvent;
 import com.oolongho.woonpc.event.NpcSpawnEvent;
+import com.oolongho.woonpc.hook.WooHologramsHook;
 import com.oolongho.woonpc.manager.NpcManagerImpl;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -104,6 +105,8 @@ public final class NpcImpl extends Npc {
                 return;
             }
             NpcData snapshot = data;
+            // 同步全息到 NPC 位置（WooHolograms 内部管理 viewer，无需 per-viewer 调用）
+            WooHologramsHook.getInstance().onNpcSpawn(getId(), snapshot.location());
             for (UUID playerId : targetViewers) {
                 Player player = Bukkit.getPlayer(playerId);
                 if (player != null && player.isOnline()) {
@@ -122,6 +125,8 @@ public final class NpcImpl extends Npc {
                 return;
             }
             controller.despawnAll();
+            // 销毁全息实体（保留 lines 存储，spawn 时重建）
+            WooHologramsHook.getInstance().onNpcDespawn(getId());
         }
     }
 
@@ -129,18 +134,22 @@ public final class NpcImpl extends Npc {
      * 静默销毁客户端实体（不触发 NpcDespawnEvent）。
      *
      * <p>供 {@link NpcManagerImpl#remove} 使用：remove 是不可取消的强制操作，
-     * 不应触发可取消的 NpcDespawnEvent。直接调用 controller.despawnAll() 销毁所有客户端实体。</p>
+     * 不应触发可取消的 NpcDespawnEvent。直接调用 controller.despawnAll() 销毁所有客户端实体，
+     * 同时通知 HologramHook 销毁全息（但保留 lines 存储以支持后续恢复）。</p>
      */
     @ApiStatus.Internal
     public void despawnSilent() {
         synchronized (this) {
             controller.despawnAll();
+            WooHologramsHook.getInstance().onNpcDespawn(getId());
         }
     }
 
     @Override
     public void remove() {
         manager.remove(getId());
+        // 释放 lines 存储（全息实体销毁已由 manager.remove 内部 despawnSilent → onNpcDespawn 完成）
+        WooHologramsHook.getInstance().onNpcRemove(getId());
     }
 
     @Override
@@ -157,6 +166,8 @@ public final class NpcImpl extends Npc {
             // LOCATION：瞬移包（SKIN dirty 时跳过，spawn 会重发）
             if (!skinDirty && dirty.contains(NpcField.LOCATION)) {
                 controller.updateLocation(snapshot.location());
+                // 同步全息位置（TextDisplay 由 controller.updateLocation 内部处理，此处仅 WooHolograms 全息）
+                WooHologramsHook.getInstance().onNpcMove(getId(), snapshot.location());
             }
             // DISPLAY_NAME：更新 TextDisplay 文本（SKIN dirty 时跳过，spawn 会重发）
             if (!skinDirty && dirty.contains(NpcField.DISPLAY_NAME)) {
@@ -197,6 +208,8 @@ public final class NpcImpl extends Npc {
         synchronized (this) {
             data = data.withLocation(location);
             controller.moveTo(location);
+            // 同步全息位置
+            WooHologramsHook.getInstance().onNpcMove(getId(), location);
         }
     }
 
