@@ -40,9 +40,9 @@ import java.util.logging.Logger;
  * 回调<b>总是异步</b>。调用方需用 Bukkit scheduler 切回主线程更新 {@code NpcData.skin}。</p>
  *
  * <h2>装配方式</h2>
- * <p>由于 Task 6 不允许修改 Task 1 的 {@code WooNPCs.java} 主类装配逻辑，本类采用懒加载单例：
- * 首次 {@link #getInstance()} 时读取 {@code config.yml} 的 {@code skin.*} 配置并初始化全部组件。
- * 提供 {@link #shutdown()} 供后续 {@code onDisable} 调用（TODO: 待允许修改主类时接入）。</p>
+ * <p>采用懒加载单例：首次 {@link #getInstance()} 时读取 {@code config.yml} 的 {@code skin.*}
+ * 配置并初始化全部组件。{@link #shutdown()} 为静态方法，由插件 {@code onDisable} 调用，
+ * 若从未初始化则为空操作，不会触发懒加载；清理后 {@code instance} 置 null 支持插件 reload。</p>
  *
  * @author oolongho
  */
@@ -101,11 +101,28 @@ public final class SkinManagerImpl implements SkinManager {
         return instance;
     }
 
-    /** 关闭皮肤系统：停止队列轮询并关闭执行器。应由插件 onDisable 调用。 */
-    public void shutdown() {
-        if (instance == null) {
-            return;
+    /**
+     * 关闭皮肤系统：停止队列轮询并关闭执行器。
+     *
+     * <p>静态方法，供插件 {@code onDisable} 调用。若 {@link SkinManagerImpl} 从未初始化
+     * （{@link #getInstance()} 未被调用过），本方法为空操作，不会触发懒加载初始化。</p>
+     *
+     * <p>清理后 {@code instance} 置 null，支持插件 reload 时重新初始化。
+     * 与 {@link #getInstance()} 的双重检查锁定共用 {@code SkinManagerImpl.class} 监视器，
+     * 避免并发初始化与关闭的竞态。</p>
+     */
+    public static void shutdown() {
+        synchronized (SkinManagerImpl.class) {
+            if (instance == null) {
+                return;
+            }
+            instance.doShutdown();
+            instance = null;
         }
+    }
+
+    /** 实际清理逻辑：停止队列 + 关闭执行器（由 {@link #shutdown()} 在同步块内调用）。 */
+    private void doShutdown() {
         mojangQueue.shutdown();
         mineSkinQueue.shutdown();
         executor.shutdown();

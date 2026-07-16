@@ -1,5 +1,6 @@
 package com.oolongho.woonpc;
 
+import com.oolongho.woonpc.skin.SkinManagerImpl;
 import org.bukkit.plugin.java.JavaPlugin;
 
 /**
@@ -30,7 +31,10 @@ public class WooNPCs extends JavaPlugin {
 
     @Override
     public void onDisable() {
-        // TODO: 后续 Task 在此执行各 manager 的清理与持久化保存逻辑
+        // 关闭皮肤系统（若已初始化）：停止队列轮询 + 关闭执行器
+        SkinManagerImpl.shutdown();
+
+        // TODO: 后续 Task 在此执行其他 manager 的清理与持久化保存逻辑
 
         getLogger().info("WooNPCs 已禁用");
         instance = null;
