@@ -295,14 +295,18 @@ public final class MainCommand implements CommandExecutor, TabCompleter {
             send(sender, "<gray>用法: /woonpc remove <name>");
             return;
         }
-        Optional<Npc> opt = NpcNameArgument.parse(npcManager, args[0]);
+        String name = args[0];
+        if (!CommandSafety.validateName(name)) {
+            send(sender, "<red>名称不合法（1-32 字符，仅字母数字下划线）。");
+            return;
+        }
+        Optional<Npc> opt = NpcNameArgument.parse(npcManager, name);
         if (opt.isEmpty()) {
             send(sender, "<red>找不到名为 <yellow>" + args[0] + " <red>的 NPC。");
             return;
         }
         Npc npc = opt.get();
         UUID id = npc.getId();
-        String name = npc.getName();
         actionManager.clearNpc(id);
         npcManager.remove(id);
         storage.delete(id);
