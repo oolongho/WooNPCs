@@ -5,6 +5,7 @@ import com.oolongho.woonpc.api.NpcData;
 import com.oolongho.woonpc.api.NpcField;
 import com.oolongho.woonpc.event.NpcDespawnEvent;
 import com.oolongho.woonpc.event.NpcInteractEvent;
+import com.oolongho.woonpc.event.NpcModifyEvent;
 import com.oolongho.woonpc.event.NpcSpawnEvent;
 import com.oolongho.woonpc.hook.WooHologramsHook;
 import com.oolongho.woonpc.manager.NpcManagerImpl;
@@ -17,6 +18,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 
 /**
  * {@link Npc} 的具体实现（内部）。
@@ -236,6 +238,39 @@ public final class NpcImpl extends Npc {
         NpcInteractEvent event = new NpcInteractEvent(player, this, clickType);
         Bukkit.getPluginManager().callEvent(event);
         // ActionManager 监听 NpcInteractEvent 并执行 actions（Task 18 装配后生效）
+    }
+
+    // ==================== 字段修改（触发 NpcModifyEvent） ====================
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>实现流程：
+     * <ol>
+     *   <li>通过 {@link #getData()}（synchronized）读取当前快照，计算 oldValue</li>
+     *   <li>在 synchronized 块<b>外</b>触发 {@link NpcModifyEvent}（避免持锁调用监听器导致死锁）</li>
+     *   <li>未取消时，在 synchronized 块内替换 {@code data}（与 {@link #update()} 共享 this 锁）</li>
+     *   <li>调用 {@link #update()}（synchronized）增量同步 dirty 字段到客户端</li>
+     * </ol>
+     *
+     * <p>{@code updater} 内部调 {@code withXxx} 会自动标记 dirty，{@code update()} 据此发包
+     * 并通过 {@code cleanCopy()} 清零 dirty。</p>
+     */
+    @Override
+    protected <T> void modify(NpcField field, T newValue,
+                              Function<NpcData, T> getter,
+                              Function<NpcData, NpcData> updater) {
+        NpcData snapshot = getData();  // synchronized read
+        T oldValue = getter.apply(snapshot);
+        NpcModifyEvent event = new NpcModifyEvent(this, field, oldValue, newValue);
+        Bukkit.getPluginManager().callEvent(event);  // 主线程触发，不持锁
+        if (event.isCancelled()) {
+            return;
+        }
+        synchronized (this) {
+            data = updater.apply(data);
+        }
+        update();  // synchronized，同步 dirty 字段到客户端
     }
 
     // ==================== 数据访问覆盖（保证可见性） ====================
