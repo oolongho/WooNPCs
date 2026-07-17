@@ -255,6 +255,12 @@ public final class NpcImpl extends Npc {
      *
      * <p>{@code updater} 内部调 {@code withXxx} 会自动标记 dirty，{@code update()} 据此发包
      * 并通过 {@code cleanCopy()} 清零 dirty。</p>
+     *
+     * <p><b>线程安全性：</b>本方法<b>必须在主线程调用</b>（命令系统、GUI 系统等入口均已在主线程）。
+     * 虽然 {@code getData()} 与 {@code data} 替换各自在 synchronized 块内，但事件触发在锁外。
+     * 若在异步线程并发调用，{@link NpcModifyEvent} 的 {@code oldValue} 可能过时——不影响最终数据
+     * 一致性（{@code updater.apply(data)} 使用当前 {@code data} 引用，不会丢失其他线程对其他字段
+     * 的修改），但事件元数据不准确。</p>
      */
     @Override
     protected <T> void modify(NpcField field, T newValue,
