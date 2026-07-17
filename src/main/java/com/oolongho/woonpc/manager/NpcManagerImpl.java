@@ -49,6 +49,14 @@ public final class NpcManagerImpl implements NpcManager {
     private final Map<String, UUID> nameIndex = new ConcurrentHashMap<>();
 
     /**
+     * 客户端实体 ID 索引：entityId → UUID，用于交互包匹配 O(1) 查询。
+     *
+     * <p>由 {@code NpcInteractListener} 在收到 {@code ServerboundInteractPacket} 时使用，
+     * 将包内的 entityId 转换为对应 NPC。create 时注册，remove 时注销。</p>
+     */
+    private final Map<Integer, UUID> entityIdIndex = new ConcurrentHashMap<>();
+
+    /**
      * NMS 适配器引用。
      *
      * <p>构造时注入，用于在插件启动阶段提前验证 NMS 就绪（若当前服务端版本不支持，
@@ -89,6 +97,16 @@ public final class NpcManagerImpl implements NpcManager {
     }
 
     @Override
+    public Optional<Npc> getByEntityId(int entityId) {
+        UUID id = entityIdIndex.get(entityId);
+        if (id == null) {
+            return Optional.empty();
+        }
+        // 可能已 remove 但索引清理边缘情况，使用 getById 二次校验
+        return getById(id);
+    }
+
+    @Override
     public Npc create(NpcData data) {
         Objects.requireNonNull(data, "data cannot be null");
         // 构造 NpcImpl（内部分配 EntityId + NpcController）
@@ -101,6 +119,8 @@ public final class NpcManagerImpl implements NpcManager {
             nameIndex.remove(npc.getName(), npc.getId());
             throw new IllegalStateException("NPC with id " + npc.getId() + " already exists (concurrent create)");
         }
+        // 注册 entityId 索引（用于 NpcInteractListener 反向查询）
+        entityIdIndex.put(npc.getEntityId(), npc.getId());
         // 注册成功，触发 NpcCreateEvent（不可取消，监听器可通过 manager 查询到 NPC）
         Bukkit.getPluginManager().callEvent(new NpcCreateEvent(npc));
         // spawn（Task 5 阶段 targetViewers 为空，spawn 为空操作；Task 7 Tracker 接入后生效）
@@ -120,6 +140,8 @@ public final class NpcManagerImpl implements NpcManager {
         ((NpcImpl) npc).despawnSilent();
         // 清理名称索引（2-arg remove 防御同名误删）
         nameIndex.remove(npc.getName(), npc.getId());
+        // 清理 entityId 索引（O(1)，npc 引用已持有）
+        entityIdIndex.remove(npc.getEntityId());
         // 触发 NpcDeleteEvent（不可取消）
         Bukkit.getPluginManager().callEvent(new NpcDeleteEvent(npc));
         return true;

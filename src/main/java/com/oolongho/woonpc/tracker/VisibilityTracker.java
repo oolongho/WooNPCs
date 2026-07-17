@@ -116,9 +116,13 @@ public final class VisibilityTracker implements Listener {
      * <p>对每个 NPC 检查世界、权限、距离，调用 {@link NpcImpl#showTo} 或 {@link NpcImpl#hideFrom}。
      * 两个方法都幂等，无需额外状态查询。</p>
      *
+     * <p>本方法为 public，供 {@code PlayerTrackerListener} / {@code WorldLoadListener}
+     * 在玩家传送、换世界、加入、世界加载等事件后即时触发可见性更新，
+     * 不必等待周期 tick 的延迟。</p>
+     *
      * @param player 目标玩家
      */
-    private void updatePlayerVisibility(Player player) {
+    public void updatePlayerVisibility(Player player) {
         Location playerLoc = player.getLocation();
         World world = playerLoc.getWorld();
         for (Npc npc : npcManager.getAll()) {

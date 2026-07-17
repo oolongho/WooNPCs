@@ -110,6 +110,17 @@ public abstract class Npc {
     }
 
     /**
+     * 获取 NPC 的客户端实体 ID（用于数据包交互匹配）。
+     *
+     * <p>由 {@code NpcController} 在构造时分配的虚拟实体 ID，
+     * {@code NpcInteractListener} 通过此 ID 将客户端 {@code ServerboundInteractPacket}
+     * 中的 {@code entityId} 与对应 NPC 关联。</p>
+     *
+     * @return 客户端实体 ID
+     */
+    public abstract int getEntityId();
+
+    /**
      * 获取包发送控制器（内部使用）。
      *
      * <p>子类通过此方法访问 {@link NpcController} 发送数据包。

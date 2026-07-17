@@ -264,6 +264,18 @@ public final class NpcImpl extends Npc {
         return data.location();
     }
 
+    /**
+     * 获取 NPC 的客户端实体 ID，委托给 {@link NpcController#getEntityId()}。
+     *
+     * <p>entityId 在 NpcController 构造时一次性分配，不可变，无需同步。</p>
+     *
+     * @return 客户端实体 ID
+     */
+    @Override
+    public int getEntityId() {
+        return controller.getEntityId();
+    }
+
     // ==================== Tracker 接入点（Task 7 使用） ====================
 
     /**

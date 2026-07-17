@@ -57,6 +57,18 @@ public interface NpcManager {
     Optional<Npc> getByName(String name);
 
     /**
+     * 按客户端实体 ID 查询 NPC（用于交互数据包匹配）。
+     *
+     * <p>{@code NpcInteractListener} 在收到 {@code ServerboundInteractPacket} 时，
+     * 通过包内的 {@code entityId} 调用本方法定位对应 NPC。entityId 在 NPC 创建时
+     * 由 {@code NpcController} 分配，全局唯一。</p>
+     *
+     * @param entityId 客户端实体 ID
+     * @return 包含对应 NPC 的 Optional，不存在返回 {@link Optional#empty()}
+     */
+    Optional<Npc> getByEntityId(int entityId);
+
+    /**
      * 创建并注册一个新 NPC。
      *
      * <p>流程：校验 name 唯一性 → 构造 NpcImpl（分配 EntityId + NpcController）→

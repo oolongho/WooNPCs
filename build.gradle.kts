@@ -29,6 +29,8 @@ dependencies {
     compileOnly("io.papermc.paper:paper-api:1.21.1-R0.1-SNAPSHOT")
     // 用于 @ApiStatus / @NotNull 等注解
     compileOnly("org.jetbrains:annotations:24.1.0")
+    // Netty：NpcInteractListener 注入 ChannelDuplexHandler 需要（运行时由服务端提供）
+    compileOnly("io.netty:netty-transport:4.1.115.Final")
 }
 
 tasks {
