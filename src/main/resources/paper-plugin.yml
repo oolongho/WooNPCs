@@ -22,6 +22,7 @@ commands:
     description: WooNPCs 管理命令
     usage: /woonpc <create|remove|list|...>
     permission: woonpc.admin
+    aliases: [wn, npc]
 
 permissions:
   woonpc.admin:
