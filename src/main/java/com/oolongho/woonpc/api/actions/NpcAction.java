@@ -56,4 +56,16 @@ public abstract class NpcAction {
      * @return 类型 ID
      */
     public abstract String typeId();
+
+    /**
+     * 动作参数摘要（用于 GUI 显示与日志记录）。
+     *
+     * <p>子类应返回简短的人类可读字符串，标识本动作的关键参数。
+     * 默认返回空字符串。GUI 截断显示（避免 lore 行过长）。</p>
+     *
+     * @return 参数摘要，无参数时返回空字符串
+     */
+    public String argsSummary() {
+        return "";
+    }
 }

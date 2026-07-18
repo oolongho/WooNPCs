@@ -74,4 +74,9 @@ public final class SendToServerAction extends NpcAction {
     public String typeId() {
         return "send_to_server";
     }
+
+    @Override
+    public String argsSummary() {
+        return serverName;
+    }
 }

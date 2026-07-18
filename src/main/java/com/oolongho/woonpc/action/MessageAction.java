@@ -48,4 +48,9 @@ public final class MessageAction extends NpcAction {
     public String typeId() {
         return "message";
     }
+
+    @Override
+    public String argsSummary() {
+        return message;
+    }
 }

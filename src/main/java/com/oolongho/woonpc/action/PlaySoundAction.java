@@ -74,4 +74,9 @@ public final class PlaySoundAction extends NpcAction {
     public String typeId() {
         return "play_sound";
     }
+
+    @Override
+    public String argsSummary() {
+        return sound.name() + " " + volume + " " + pitch;
+    }
 }

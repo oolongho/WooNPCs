@@ -49,4 +49,9 @@ public final class WaitAction extends NpcAction {
     public String typeId() {
         return "wait";
     }
+
+    @Override
+    public String argsSummary() {
+        return delayTicks + " ticks";
+    }
 }

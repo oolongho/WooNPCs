@@ -47,4 +47,9 @@ public final class PlayerCommandAction extends NpcAction {
     public String typeId() {
         return "player_command";
     }
+
+    @Override
+    public String argsSummary() {
+        return command;
+    }
 }

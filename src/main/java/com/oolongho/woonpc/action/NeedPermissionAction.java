@@ -46,4 +46,9 @@ public final class NeedPermissionAction extends NpcAction {
     public String typeId() {
         return "need_permission";
     }
+
+    @Override
+    public String argsSummary() {
+        return permission;
+    }
 }

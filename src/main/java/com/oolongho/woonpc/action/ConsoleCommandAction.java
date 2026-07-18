@@ -46,4 +46,9 @@ public final class ConsoleCommandAction extends NpcAction {
     public String typeId() {
         return "console_command";
     }
+
+    @Override
+    public String argsSummary() {
+        return command;
+    }
 }

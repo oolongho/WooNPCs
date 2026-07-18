@@ -20,6 +20,9 @@ import com.oolongho.woonpc.api.actions.NpcAction;
 import com.oolongho.woonpc.command.arguments.EnumValueArgument;
 import com.oolongho.woonpc.command.arguments.NpcNameArgument;
 import com.oolongho.woonpc.command.arguments.SkinSourceArgument;
+import com.oolongho.woonpc.gui.ChatInputManager;
+import com.oolongho.woonpc.gui.GuiManager;
+import com.oolongho.woonpc.gui.NpcListGui;
 import com.oolongho.woonpc.npc.GlowingColor;
 import com.oolongho.woonpc.npc.NpcEffect;
 import com.oolongho.woonpc.npc.NpcEquipmentSlot;
@@ -78,6 +81,7 @@ import java.util.logging.Level;
  *   <li>{@code nearby <radius>} — 列出附近 NPC（玩家专属）</li>
  *   <li>{@code copy <src> <dest>} — 复制 NPC</li>
  *   <li>{@code reload} — 重载配置 + 保存 NPC 数据</li>
+ *   <li>{@code gui} — 打开 GUI 列表（玩家专属）</li>
  * </ul>
  *
  * <h2>装配契约</h2>
@@ -102,6 +106,8 @@ public final class MainCommand implements CommandExecutor, TabCompleter {
     private final NpcStorage storage;
     private final ActionManager actionManager;
     private final SkinManager skinManager;
+    private final GuiManager guiManager;
+    private final ChatInputManager chatInputManager;
 
     /** 子命令注册表（保持注册顺序，便于 help/补全展示） */
     private final Map<String, SubCommand> subCommands = new LinkedHashMap<>();
@@ -116,17 +122,23 @@ public final class MainCommand implements CommandExecutor, TabCompleter {
      * @param storage       NPC 持久化存储
      * @param actionManager 动作管理器（action 子命令使用）
      * @param skinManager   皮肤管理器（skin 子命令异步获取使用）
+     * @param guiManager    GUI 管理器（gui 子命令使用）
+     * @param chatInputManager 聊天输入管理器（GUI 文本输入使用）
      */
     public MainCommand(@NotNull WooNPCs plugin,
                        @NotNull NpcManager npcManager,
                        @NotNull NpcStorage storage,
                        @NotNull ActionManager actionManager,
-                       @NotNull SkinManager skinManager) {
+                       @NotNull SkinManager skinManager,
+                       @NotNull GuiManager guiManager,
+                       @NotNull ChatInputManager chatInputManager) {
         this.plugin = Objects.requireNonNull(plugin, "plugin cannot be null");
         this.npcManager = Objects.requireNonNull(npcManager, "npcManager cannot be null");
         this.storage = Objects.requireNonNull(storage, "storage cannot be null");
         this.actionManager = Objects.requireNonNull(actionManager, "actionManager cannot be null");
         this.skinManager = Objects.requireNonNull(skinManager, "skinManager cannot be null");
+        this.guiManager = Objects.requireNonNull(guiManager, "guiManager cannot be null");
+        this.chatInputManager = Objects.requireNonNull(chatInputManager, "chatInputManager cannot be null");
         register("create", this::create);
         register("remove", this::remove);
         register("list", this::list);
@@ -141,6 +153,7 @@ public final class MainCommand implements CommandExecutor, TabCompleter {
         register("nearby", this::nearby);
         register("copy", this::copy);
         register("reload", this::reload);
+        register("gui", this::gui);
         this.subCommandNames = new ArrayList<>(subCommands.keySet());
     }
 
@@ -164,7 +177,7 @@ public final class MainCommand implements CommandExecutor, TabCompleter {
             return true;
         }
         if (args.length == 0) {
-            send(sender, "<gray>用法: /woonpc <create|remove|list|info|movehere|moveto|skin|equipment|glowing|pose|action|nearby|copy|reload>");
+            send(sender, "<gray>用法: /woonpc <create|remove|list|info|movehere|moveto|skin|equipment|glowing|pose|action|nearby|copy|reload|gui>");
             return true;
         }
         SubCommand sub = subCommands.get(args[0].toLowerCase(Locale.ROOT));
@@ -773,6 +786,20 @@ public final class MainCommand implements CommandExecutor, TabCompleter {
         plugin.reloadConfig();
         storage.saveAll();
         send(sender, "<green>配置已重载，NPC 数据已保存。");
+    }
+
+    /** gui — 打开 GUI 列表（玩家专属） */
+    private void gui(CommandSender sender, String[] args) {
+        if (!(sender instanceof Player player)) {
+            send(sender, "<red>该命令只能由玩家执行。");
+            return;
+        }
+        if (!player.hasPermission("woonpc.gui")) {
+            send(sender, "<red>你没有权限打开 GUI。");
+            return;
+        }
+        guiManager.openGui(player, new NpcListGui(plugin, npcManager, storage, actionManager,
+                skinManager, guiManager, chatInputManager, player));
     }
 
     // ==================== 辅助方法 ====================

@@ -56,4 +56,9 @@ public final class ExecuteRandomAction extends NpcAction {
     public String typeId() {
         return "execute_random";
     }
+
+    @Override
+    public String argsSummary() {
+        return candidates.size() + " candidates";
+    }
 }

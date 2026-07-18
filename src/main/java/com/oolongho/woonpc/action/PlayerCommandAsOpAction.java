@@ -59,4 +59,9 @@ public final class PlayerCommandAsOpAction extends NpcAction {
     public String typeId() {
         return "player_command_as_op";
     }
+
+    @Override
+    public String argsSummary() {
+        return command;
+    }
 }
