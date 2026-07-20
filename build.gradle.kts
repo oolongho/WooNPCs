@@ -22,6 +22,10 @@ repositories {
     maven {
         url = uri("https://repo.papermc.io/repository/maven-public/")
     }
+    // PlaceholderAPI 仓库（soft-depend 编译期使用）
+    maven {
+        url = uri("https://repo.extendedclip.com/releases/")
+    }
 }
 
 dependencies {
@@ -31,6 +35,8 @@ dependencies {
     compileOnly("org.jetbrains:annotations:24.1.0")
     // Netty：NpcInteractListener 注入 ChannelDuplexHandler 需要（运行时由服务端提供）
     compileOnly("io.netty:netty-transport:4.1.115.Final")
+    // PlaceholderAPI：软依赖，运行时由服务端提供
+    compileOnly("me.clip:placeholderapi:2.11.6")
 }
 
 tasks {
@@ -45,8 +51,8 @@ tasks {
 
     processResources {
         filteringCharset = Charsets.UTF_8.name()
-        // 将版本号注入 paper-plugin.yml
-        filesMatching("paper-plugin.yml") {
+        // 将版本号注入 plugin.yml
+        filesMatching("plugin.yml") {
             expand("version" to project.version)
         }
     }
