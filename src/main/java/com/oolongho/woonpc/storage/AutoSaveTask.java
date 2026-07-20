@@ -1,26 +1,30 @@
 package com.oolongho.woonpc.storage;
 
-import org.bukkit.Bukkit;
+import com.oolongho.woonpc.util.Scheduler;
 import org.bukkit.plugin.Plugin;
-import org.bukkit.scheduler.BukkitTask;
 import org.jetbrains.annotations.ApiStatus;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Objects;
 
 /**
- * 自动保存任务：周期性调用 {@link NpcStorage#saveAll} 落盘内存中的 NPC 数据。
+ * 自动保存任务：周期性调用多个保存回调落盘内存数据。
  *
- * <p>当前基于 Bukkit Scheduler（{@code Bukkit.getScheduler().runTaskTimer}）实现，
- * 在主线程周期执行。Task 15 切换 Folia 后改用 Folia 的 RegionScheduler / GlobalScheduler。</p>
+ * <p>通过 {@link Scheduler#runTimer} 调度，Paper 走主线程 / Folia 走 {@code globalRegionScheduler}。
+ * 一次调度内顺序执行所有回调（如 {@code storage::saveAll} 与 {@code actionStorage::saveAll}），
+ * 任一回调抛异常不中断后续回调的执行（catch + warning）。</p>
  *
  * <h2>装配方式</h2>
  * <pre>{@code
- * YamlNpcStorage storage = new YamlNpcStorage(plugin);
- * AutoSaveTask autoSave = new AutoSaveTask(plugin, storage);
- * autoSave.startFromConfig();   // 读取 config.yml 的 settings.auto-save-interval
- * // onDisable 时：
+ * AutoSaveTask autoSave = new AutoSaveTask(plugin, scheduler,
+ *         storage::saveAll,
+ *         () -> actionStorage.saveAll(actionManager.serializeAll()));
+ * autoSave.startFromConfig();
+ * // onDisable：
  * autoSave.stop();
- * storage.saveAll();            // 关闭前最后保存一次
+ * storage.saveAll();
  * }</pre>
  *
  * <h2>线程安全</h2>
@@ -41,20 +45,23 @@ public final class AutoSaveTask {
     private static final int TICKS_PER_SECOND = 20;
 
     private final Plugin plugin;
-    private final NpcStorage storage;
+    private final Scheduler scheduler;
+    private final List<Runnable> saveCallbacks;
 
     /** 当前调度任务，null 表示未启动 */
-    private volatile BukkitTask task;
+    private volatile Scheduler.TaskHandle task;
 
     /**
      * 创建自动保存任务。
      *
-     * @param plugin  插件实例
-     * @param storage 存储实现
+     * @param plugin         插件实例
+     * @param scheduler      调度器
+     * @param saveCallbacks 保存回调列表（顺序执行，每个回调代表一种数据的 saveAll）
      */
-    public AutoSaveTask(Plugin plugin, NpcStorage storage) {
+    public AutoSaveTask(Plugin plugin, Scheduler scheduler, Runnable... saveCallbacks) {
         this.plugin = Objects.requireNonNull(plugin, "plugin cannot be null");
-        this.storage = Objects.requireNonNull(storage, "storage cannot be null");
+        this.scheduler = Objects.requireNonNull(scheduler, "scheduler cannot be null");
+        this.saveCallbacks = new ArrayList<>(Arrays.asList(saveCallbacks));
     }
 
     /**
@@ -69,12 +76,7 @@ public final class AutoSaveTask {
         if (intervalTicks <= 0) {
             return;
         }
-        task = Bukkit.getScheduler().runTaskTimer(
-                plugin,
-                storage::saveAll,
-                intervalTicks,
-                intervalTicks
-        );
+        task = scheduler.runTimer(this::runAllSaves, intervalTicks, intervalTicks);
     }
 
     /**
@@ -91,7 +93,21 @@ public final class AutoSaveTask {
         }
         int ticks = seconds * TICKS_PER_SECOND;
         start(ticks);
-        plugin.getLogger().info(() -> "自动保存已启用，间隔 " + seconds + " 秒（" + ticks + " tick）");
+        plugin.getLogger().info(() -> "自动保存已启用，间隔 " + seconds + " 秒（" + ticks + " tick），"
+                + saveCallbacks.size() + " 个保存回调");
+    }
+
+    /**
+     * 顺序执行所有保存回调，任一抛异常不中断后续。
+     */
+    private void runAllSaves() {
+        for (Runnable cb : saveCallbacks) {
+            try {
+                cb.run();
+            } catch (RuntimeException e) {
+                plugin.getLogger().warning("自动保存回调失败: " + e.getMessage());
+            }
+        }
     }
 
     /**
@@ -100,7 +116,7 @@ public final class AutoSaveTask {
      * <p>任务未运行时调用为空操作。</p>
      */
     public void stop() {
-        BukkitTask current = task;
+        Scheduler.TaskHandle current = task;
         if (current != null) {
             current.cancel();
             task = null;

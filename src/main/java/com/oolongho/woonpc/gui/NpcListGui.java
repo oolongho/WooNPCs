@@ -13,6 +13,7 @@ import com.oolongho.woonpc.api.actions.ActionTrigger;
 import com.oolongho.woonpc.skin.SkinData;
 import com.oolongho.woonpc.storage.NpcStorage;
 import com.oolongho.woonpc.util.CommandSafety;
+import com.oolongho.woonpc.util.Scheduler;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -47,7 +48,7 @@ import java.util.UUID;
  * <ul>
  *   <li>{@link SortType#NAME}：按名称字母序（不区分大小写，默认）</li>
  *   <li>{@link SortType#DISTANCE}：按到查看者的距离升序（同世界优先）</li>
- *   <li>{@link SortType#ENABLED}：按可见状态（暂以 hashCode 稳定排序，待 Task 19 完善）</li>
+ *   <li>{@link SortType#ENABLED}：启用转头跟踪的 NPC 优先</li>
  *   <li>{@link SortType#SKIN}：自定义皮肤在前，默认皮肤在后</li>
  * </ul>
  *
@@ -77,11 +78,11 @@ public final class NpcListGui extends GuiScreen {
     private final NpcManager npcManager;
     private final NpcStorage storage;
     private final ActionManager actionManager;
-    /** 预留给后续 GUI 间共享皮肤操作（如批量重获取） */
-    @SuppressWarnings("unused")
+    /** 传递给子 GUI（NpcDetailGui） */
     private final SkinManager skinManager;
     private final GuiManager guiManager;
     private final ChatInputManager chatInputManager;
+    private final Scheduler scheduler;
     /** 查看此 GUI 的玩家，用于 DISTANCE 排序 */
     private final Player viewer;
 
@@ -97,9 +98,10 @@ public final class NpcListGui extends GuiScreen {
      * @param npcManager      NPC 管理器
      * @param storage         NPC 持久化存储
      * @param actionManager   动作管理器（用于统计 NPC 动作数）
-     * @param skinManager     皮肤管理器（预留给后续皮肤相关操作）
+     * @param skinManager     皮肤管理器，传递给子 GUI（NpcDetailGui）
      * @param guiManager      GUI 管理器（用于打开/关闭 GUI）
      * @param chatInputManager 聊天输入管理器（用于创建 NPC 时输入名称）
+     * @param scheduler       调度器（传给子 NpcDetailGui）
      * @param viewer          查看此 GUI 的玩家（用于 DISTANCE 排序）
      */
     public NpcListGui(@NotNull WooNPCs plugin,
@@ -109,6 +111,7 @@ public final class NpcListGui extends GuiScreen {
                       @NotNull SkinManager skinManager,
                       @NotNull GuiManager guiManager,
                       @NotNull ChatInputManager chatInputManager,
+                      @NotNull Scheduler scheduler,
                       @NotNull Player viewer) {
         super("<dark_aqua>NPC 列表", SIZE, null);
         this.plugin = Objects.requireNonNull(plugin, "plugin cannot be null");
@@ -118,6 +121,7 @@ public final class NpcListGui extends GuiScreen {
         this.skinManager = Objects.requireNonNull(skinManager, "skinManager cannot be null");
         this.guiManager = Objects.requireNonNull(guiManager, "guiManager cannot be null");
         this.chatInputManager = Objects.requireNonNull(chatInputManager, "chatInputManager cannot be null");
+        this.scheduler = Objects.requireNonNull(scheduler, "scheduler cannot be null");
         this.viewer = Objects.requireNonNull(viewer, "viewer cannot be null");
     }
 
@@ -142,39 +146,38 @@ public final class NpcListGui extends GuiScreen {
     // ==================== Row 1 背景填充 ====================
 
     /**
-     * 填充 Row 1 中未被工具栏占用的槽位（1/3/5/7）为灰色玻璃背景。
+     * 填充 Row 1 中未被工具栏占用的槽位（1/2/3/5/7）为灰色玻璃背景。
      */
     private void fillFirstRow() {
-        for (int slot = 1; slot <= 7; slot += 2) {
+        for (int slot : new int[]{1, 2, 3, 5, 7}) {
             setButton(slot, backgroundButton());
         }
     }
 
-    // ==================== Row 1 工具栏（slot 0/2/4/6/8） ====================
+    // ==================== Row 1 工具栏（slot 0/4/6/8） ====================
 
     private void renderToolbar() {
         renderReloadButton();
-        renderPerformanceButton();
         renderCreateButton();
         renderHelpButton();
         renderNearbyButton();
     }
 
-    /** [0] 重载配置：重载 plugin 配置 + 保存全部 NPC 数据（需 woonpc.command.reload 权限） */
+    /** [0] 重载配置：完整重载流程（保存数据 + reloadConfig + 语言/debug/PAPI + trackers + auto-save），需 woonpc.command.reload 权限 */
     private void renderReloadButton() {
         boolean hasPerm = viewer.hasPermission(RELOAD_PERM);
         GuiButton.Builder builder = GuiButton.builder(Material.CLOCK)
                 .name("<aqua>重载配置")
                 .lore(List.of(
-                        "<gray>重载 plugin/NpcManager",
-                        "<gray>/NpcStorage/ActionManager",
+                        "<gray>保存 NPC + actions 数据",
+                        "<gray>重载 config/语言/debug/PAPI",
+                        "<gray>重建 trackers/auto-save",
                         hasPerm ? "<green>点击执行重载" : "<red>需要 woonpc.command.reload 权限"
                 ));
         if (hasPerm) {
             builder.onClick(ctx -> {
-                plugin.reloadConfig();
-                storage.saveAll();
-                ctx.player().sendMessage(MM.deserialize("<green>配置已重载，NPC 数据已保存"));
+                plugin.reloadAll();
+                ctx.player().sendMessage(MM.deserialize("<green>配置已重载，NPC 与动作数据已保存。"));
                 refresh();
             });
         } else {
@@ -182,16 +185,6 @@ public final class NpcListGui extends GuiScreen {
                     ctx.player().sendMessage(MM.deserialize("<red>无权限: woonpc.command.reload")));
         }
         setButton(0, builder.build());
-    }
-
-    /** [2] 性能分析：预留入口（Task 19 性能测试后实现） */
-    private void renderPerformanceButton() {
-        setButton(2, GuiButton.builder(Material.COMPARATOR)
-                .name("<aqua>性能分析")
-                .lore(List.of("<gray>预留（Task 19 性能测试后实现）"))
-                .onClick(ctx ->
-                        ctx.player().sendMessage(MM.deserialize("<yellow>功能开发中")))
-                .build());
     }
 
     /** [4] 创建 NPC：关闭 GUI → 聊天输入名称 → 校验 → 创建 → 重新打开列表 */
@@ -224,9 +217,8 @@ public final class NpcListGui extends GuiScreen {
                                             .location(p.getLocation())
                                             .build();
                                     storage.save(created);
-                                    // Task 3 NpcDetailGui 未实现：发送提示并重新打开列表
                                     p.sendMessage(MM.deserialize("<green>NPC <yellow>" + name
-                                            + " <green>已创建，详情页开发中"));
+                                            + " <green>已创建"));
                                     guiManager.openGui(p, this);
                                 } catch (IllegalStateException e) {
                                     p.sendMessage(MM.deserialize("<red>创建失败: " + e.getMessage()));
@@ -333,7 +325,7 @@ public final class NpcListGui extends GuiScreen {
                     ctx.player().closeInventory();
                     guiManager.openGui(ctx.player(),
                             new NpcDetailGui(plugin, npcManager, storage, actionManager, skinManager,
-                                    guiManager, chatInputManager, npc.getId(), npcIds, index, this));
+                                    guiManager, chatInputManager, scheduler, npc.getId(), npcIds, index, this));
                 });
 
         // 自定义皮肤时设置 PlayerProfile 显示真实头像（Paper API）
@@ -443,8 +435,8 @@ public final class NpcListGui extends GuiScreen {
             case NAME -> Comparator.comparing(Npc::getName, String.CASE_INSENSITIVE_ORDER);
             // 到查看者距离升序（同世界优先，跨世界排末尾）
             case DISTANCE -> distanceComparator();
-            // TODO Task 19: 完善按可见状态排序（暂以 hashCode 稳定排序）
-            case ENABLED -> Comparator.comparingInt(Object::hashCode);
+            // 启用转头跟踪的 NPC 优先（"启用"语义：turnToPlayer=true 视为激活状态）
+            case ENABLED -> Comparator.comparing((Npc npc) -> !npc.getData().turnToPlayer());
             // 自定义皮肤在前，默认皮肤在后
             case SKIN -> Comparator.comparing((Npc npc) -> npc.getData().skin().isDefault());
         });
@@ -493,7 +485,7 @@ public final class NpcListGui extends GuiScreen {
      * <ul>
      *   <li>{@link #NAME}：名称字母序</li>
      *   <li>{@link #DISTANCE}：到查看者距离升序</li>
-     *   <li>{@link #ENABLED}：可见状态（待完善）</li>
+     *   <li>{@link #ENABLED}：启用转头跟踪的 NPC 优先</li>
      *   <li>{@link #SKIN}：自定义皮肤优先</li>
      * </ul>
      */

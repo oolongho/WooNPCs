@@ -1,6 +1,7 @@
 package com.oolongho.woonpc.npc;
 
 import com.oolongho.woonpc.api.NpcData;
+import com.oolongho.woonpc.api.NpcField;
 import com.oolongho.woonpc.hologram.DisplayNameRenderer;
 import com.oolongho.woonpc.nms.NmsAdapter;
 import com.oolongho.woonpc.nms.NmsAdapterFactory;
@@ -19,7 +20,6 @@ import org.jetbrains.annotations.ApiStatus;
 
 import java.util.Collections;
 import java.util.EnumMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -257,6 +257,40 @@ public final class NpcController {
     }
 
     /**
+     * 更新 tab 列表显示状态到所有可见玩家。
+     *
+     * <p>当 {@link NpcField#SHOW_IN_TAB} 字段运行时切换时调用本方法。
+     * 内部委托 {@link NmsAdapter#updateTabListVisibility} 发送 UPDATE_LISTED 包。</p>
+     *
+     * @param showInTab true=显示在 tab 列表，false=从 tab 列表移除
+     */
+    public void updateTabListVisibility(boolean showInTab) {
+        for (UUID playerId : visiblePlayers) {
+            Player player = Bukkit.getPlayer(playerId);
+            if (player != null && player.isOnline()) {
+                adapter.updateTabListVisibility(player, uuid, showInTab);
+            }
+        }
+    }
+
+    /**
+     * 更新缩放比例到所有可见玩家。
+     *
+     * <p>当 {@link NpcField#SCALE} 字段运行时切换时调用本方法。
+     * 内部委托 {@link NmsAdapter#updateScale} 发送 UpdateAttributes 包。</p>
+     *
+     * @param scale 缩放比例（1.0 = 原始大小）
+     */
+    public void updateScale(float scale) {
+        for (UUID playerId : visiblePlayers) {
+            Player player = Bukkit.getPlayer(playerId);
+            if (player != null && player.isOnline()) {
+                adapter.updateScale(player, entityId, scale);
+            }
+        }
+    }
+
+    /**
      * 更新头顶显示名文本。
      *
      * <p>委托 {@link DisplayNameRenderer#showTo} 完成显示名同步。{@code showTo} 自适应三种场景：</p>
@@ -286,25 +320,12 @@ public final class NpcController {
     // ==================== 移动 ====================
 
     /**
-     * 移动 NPC 到新位置。
-     *
-     * <p><b>Phase 1</b>：瞬移，等价于 {@link #updateLocation}。
-     * <b>Phase 2</b>：将扩展为平滑路径跟随。</p>
+     * 移动 NPC 到新位置（瞬移）。
      *
      * @param location 目标位置
      */
     public void moveTo(Location location) {
         updateLocation(location);
-    }
-
-    /**
-     * 沿路径移动 NPC（Phase 2 预留接口）。
-     *
-     * @param path 路径点列表
-     * @throws UnsupportedOperationException Phase 2 功能尚未实现
-     */
-    public void followPath(List<Location> path) {
-        throw new UnsupportedOperationException("followPath: Phase 2 feature, not implemented yet");
     }
 
     // ==================== 状态查询 ====================

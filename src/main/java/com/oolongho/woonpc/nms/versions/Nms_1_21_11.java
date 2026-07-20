@@ -29,7 +29,12 @@ import java.util.UUID;
  * DataValue 反射自适应机制在 1.21.9+ 仍然有效（{@code DataValue.create(value, id)} 静态方法
  * 签名未变），故无需额外覆盖元数据相关方法。</p>
  *
- * <p><b>不支持 1.21.0-1.21.1</b>（与 fancynpcs-v2 决策一致，NMS API 差异过大）。</p>
+ * <h2>PropertyMap 构造器版本自适应</h2>
+ * <p>authlib 7.0.63（26.1.2+）将 {@code PropertyMap} 构造器入参从
+ * {@code ImmutableMultimap} 改为更通用的 {@code Multimap}。由于 ImmutableMultimap
+ * 实现 Multimap 接口，本类通过扫描 declared constructors 找单参且参数类型可接受
+ * ImmutableMultimap 的构造器，兼容 1.21.9-1.21.11（authlib 6.0.x）与 26.1.2+
+ * （authlib 7.0.x）两种签名。</p>
  *
  * <h2>参考实现</h2>
  * <p>新 API 写法参考 {@code fancynpcs-v2/implementation_1_21_9/Npc_1_21_9.java} 的
@@ -58,13 +63,48 @@ public class Nms_1_21_11 extends Nms_1_21 {
     private static final Method IMMUTABLE_MULTIMAP_EMPTY_METHOD =
             ReflectUtil.getMethod(IMMUTABLE_MULTIMAP_CLASS, "of");
 
-    /** PropertyMap(ImmutableMultimap) 构造器缓存 */
-    private static final Constructor<?> PROPERTY_MAP_CTOR =
-            ReflectUtil.getConstructor(PROPERTY_MAP_CLASS, IMMUTABLE_MULTIMAP_CLASS);
+    /**
+     * PropertyMap 单参构造器缓存。
+     *
+     * <p>扫描 declared constructors 找单参且参数类型可接受 ImmutableMultimap
+     * （即 Multimap 或其父类/接口）的构造器，兼容两种签名：</p>
+     * <ul>
+     *   <li>1.21.9-1.21.11（authlib 6.0.x）：{@code PropertyMap(ImmutableMultimap)}</li>
+     *   <li>26.1.2+（authlib 7.0.63）：{@code PropertyMap(Multimap)}</li>
+     * </ul>
+     * <p>ImmutableMultimap 实例可同时满足两种签名，调用方无需关心具体类型。</p>
+     */
+    private static final Constructor<?> PROPERTY_MAP_CTOR = findPropertyMapConstructor();
 
     /** GameProfile(UUID, String, PropertyMap) 3 参构造器缓存（1.21.9+ 专用） */
     private static final Constructor<?> GAME_PROFILE_3_ARG_CTOR =
             ReflectUtil.getConstructor(GAME_PROFILE_CLASS, UUID.class, String.class, PROPERTY_MAP_CLASS);
+
+    /**
+     * 扫描 PropertyMap 的 declared constructors 找单参且可接受 ImmutableMultimap 的构造器。
+     *
+     * <p>查找规则：参数数量为 1，且参数类型对 ImmutableMultimap 可分配
+     * （{@code paramType.isAssignableFrom(ImmutableMultimap.class)}）。
+     * 兼容 authlib 6.0.x 的 {@code PropertyMap(ImmutableMultimap)} 与
+     * authlib 7.0.x 的 {@code PropertyMap(Multimap)} 两种签名。</p>
+     *
+     * @return 找到的构造器（已 setAccessible）
+     * @throws WooNPCsReflectException 如果未找到匹配构造器
+     */
+    private static Constructor<?> findPropertyMapConstructor() {
+        for (Constructor<?> ctor : PROPERTY_MAP_CLASS.getDeclaredConstructors()) {
+            if (ctor.getParameterCount() != 1) {
+                continue;
+            }
+            Class<?> paramType = ctor.getParameterTypes()[0];
+            if (paramType.isAssignableFrom(IMMUTABLE_MULTIMAP_CLASS)) {
+                ctor.setAccessible(true);
+                return ctor;
+            }
+        }
+        throw new WooNPCsReflectException(
+                "No single-param constructor accepting ImmutableMultimap found in PropertyMap");
+    }
 
     @Override
     public String getVersion() {
@@ -83,7 +123,9 @@ public class Nms_1_21_11 extends Nms_1_21 {
      *   <li>访问器为 {@code properties()} 而非 {@code getProperties()}</li>
      * </ul>
      *
-     * <p>无皮肤时构造空 PropertyMap（{@code ImmutableMultimap.of()}）传入。</p>
+     * <p>无皮肤时构造空 PropertyMap（{@code ImmutableMultimap.of()}）传入。
+     * PropertyMap 构造器入参类型由 {@link #PROPERTY_MAP_CTOR} 自适应，
+     * 兼容 1.21.9-1.21.11 与 26.1.2+ 两种 authlib 签名。</p>
      *
      * @param uuid     NPC 的 UUID
      * @param username GameProfile 玩家名

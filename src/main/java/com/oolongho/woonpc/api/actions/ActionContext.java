@@ -3,6 +3,7 @@ package com.oolongho.woonpc.api.actions;
 import com.oolongho.woonpc.WooNPCs;
 import com.oolongho.woonpc.api.Npc;
 import com.oolongho.woonpc.npc.ClickType;
+import com.oolongho.woonpc.util.PlaceholderUtil;
 import org.bukkit.entity.Player;
 
 import java.util.Objects;
@@ -14,15 +15,13 @@ import java.util.Objects;
  * 由 {@link ActionManager} 在 {@code execute} 时构造，传递给 {@link NpcAction#execute}。</p>
  *
  * <h2>占位符替换</h2>
- * <p>{@link #replacePlaceholders(String)} 提供轻量级字符串模板，支持以下占位符：</p>
- * <ul>
- *   <li>{@code {player}} - 玩家名</li>
- *   <li>{@code {npc}} / {@code {npc_name}} - NPC 名称（两种写法等价）</li>
- *   <li>{@code {world}} - 玩家所在世界</li>
- *   <li>{@code {x}} / {@code {y}} / {@code {z}} - 玩家坐标（保留 2 位小数）</li>
- * </ul>
+ * <p>{@link #replacePlaceholders(String)} 提供两级占位符替换：</p>
+ * <ol>
+ *   <li>内置占位符（{@code {player}} / {@code {npc}} / {@code {world}} / {@code {x},{y},{z}} 等）</li>
+ *   <li>PlaceholderAPI 占位符（{@code %...%} 格式，需服务端安装 PAPI）</li>
+ * </ol>
  *
- * <p>复杂的 PlaceholderAPI 集成由后续 Task 处理，本类仅提供内置占位符。</p>
+ * <p>两种占位符可混用，内置先替换再交给 PAPI。</p>
  *
  * @param player    执行交互的玩家
  * @param npc       被交互的 NPC
@@ -45,18 +44,18 @@ public record ActionContext(Player player, Npc npc, ClickType clickType, WooNPCs
     }
 
     /**
-     * 替换字符串中的内置占位符。
+     * 替换字符串中的占位符（内置 + PlaceholderAPI）。
      *
-     * <p>支持占位符：{@code {player}}、{@code {npc}}、{@code {npc_name}}、
-     * {@code {world}}、{@code {x}}、{@code {y}}、{@code {z}}。
-     * 输入 null 时返回空串（避免 NPE）。</p>
+     * <p>顺序：先替换内置 {@code {player}}/{@code {npc}}/{@code {world}}/{@code {x,y,z}}，
+     * 再交由 PlaceholderAPI 解析 {@code %...%} 占位符（PAPI 未安装则跳过此步）。
+     * 输入 null 时返回空串。</p>
      *
      * @param input 原始字符串，可为 null
      * @return 替换后的字符串，input 为 null 时返回 {@code ""}
      */
     public String replacePlaceholders(String input) {
         if (input == null) return "";
-        return input
+        String result = input
                 .replace("{player}", player.getName())
                 .replace("{npc}", npc.getName())
                 .replace("{npc_name}", npc.getName())
@@ -64,5 +63,6 @@ public record ActionContext(Player player, Npc npc, ClickType clickType, WooNPCs
                 .replace("{x}", String.format("%.2f", player.getLocation().getX()))
                 .replace("{y}", String.format("%.2f", player.getLocation().getY()))
                 .replace("{z}", String.format("%.2f", player.getLocation().getZ()));
+        return PlaceholderUtil.setPlaceholders(player, result);
     }
 }

@@ -1,6 +1,5 @@
 package com.oolongho.woonpc.gui;
 
-import com.oolongho.woonpc.WooNPCs;
 import com.oolongho.woonpc.api.Npc;
 import com.oolongho.woonpc.api.NpcManager;
 import com.oolongho.woonpc.storage.NpcStorage;
@@ -52,8 +51,6 @@ public final class NpcPermissionEditGui extends GuiScreen {
     /** GUI 单行最多显示的权限数（slot 9-17） */
     private static final int MAX_DISPLAYED_PERMS = 9;
 
-    @SuppressWarnings("unused")
-    private final WooNPCs plugin;
     private final NpcManager npcManager;
     private final NpcStorage storage;
     private final GuiManager guiManager;
@@ -63,7 +60,6 @@ public final class NpcPermissionEditGui extends GuiScreen {
     /**
      * 构造 NPC 权限编辑 GUI。
      *
-     * @param plugin           插件实例
      * @param npcManager       NPC 管理器
      * @param storage          NPC 持久化存储
      * @param guiManager       GUI 管理器（返回导航 + 添加权限后重开 GUI）
@@ -71,15 +67,13 @@ public final class NpcPermissionEditGui extends GuiScreen {
      * @param npcId            目标 NPC 的 UUID
      * @param parent           父级 GUI（通常为 NpcDetailGui）
      */
-    public NpcPermissionEditGui(@NotNull WooNPCs plugin,
-                                @NotNull NpcManager npcManager,
+    public NpcPermissionEditGui(@NotNull NpcManager npcManager,
                                 @NotNull NpcStorage storage,
                                 @NotNull GuiManager guiManager,
                                 @NotNull ChatInputManager chatInputManager,
                                 @NotNull UUID npcId,
                                 @Nullable GuiScreen parent) {
         super("<dark_aqua>NPC 权限编辑", SIZE, parent);
-        this.plugin = Objects.requireNonNull(plugin, "plugin cannot be null");
         this.npcManager = Objects.requireNonNull(npcManager, "npcManager cannot be null");
         this.storage = Objects.requireNonNull(storage, "storage cannot be null");
         this.guiManager = Objects.requireNonNull(guiManager, "guiManager cannot be null");
@@ -155,7 +149,7 @@ public final class NpcPermissionEditGui extends GuiScreen {
                                 newPerms.add(input);
                                 current.setVisibilityPermissions(newPerms);
                                 storage.save(current);
-                                guiManager.openGui(p, new NpcPermissionEditGui(plugin, npcManager, storage,
+                                guiManager.openGui(p, new NpcPermissionEditGui(npcManager, storage,
                                         guiManager, chatInputManager, npcId, parent));
                             });
                 })

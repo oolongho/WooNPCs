@@ -2,7 +2,7 @@ package com.oolongho.woonpc.listener;
 
 import com.oolongho.woonpc.WooNPCs;
 import com.oolongho.woonpc.tracker.VisibilityTracker;
-import org.bukkit.Bukkit;
+import com.oolongho.woonpc.util.Scheduler;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -43,16 +43,19 @@ public final class PlayerTrackerListener implements Listener {
 
     private final WooNPCs plugin;
     private final VisibilityTracker tracker;
+    private final Scheduler scheduler;
 
     /**
      * 构造玩家追踪监听器。
      *
-     * @param plugin  插件实例
-     * @param tracker 可见性追踪器
+     * @param plugin    插件实例
+     * @param tracker   可见性追踪器
+     * @param scheduler 调度器（延迟 1 tick 切回主线程使用）
      */
-    public PlayerTrackerListener(WooNPCs plugin, VisibilityTracker tracker) {
+    public PlayerTrackerListener(WooNPCs plugin, VisibilityTracker tracker, Scheduler scheduler) {
         this.plugin = Objects.requireNonNull(plugin, "plugin cannot be null");
         this.tracker = Objects.requireNonNull(tracker, "tracker cannot be null");
+        this.scheduler = Objects.requireNonNull(scheduler, "scheduler cannot be null");
     }
 
     /**
@@ -61,12 +64,17 @@ public final class PlayerTrackerListener implements Listener {
      * <p>使用 {@link EventPriority#MONITOR}：在其他插件处理传送逻辑之后再触发，
      * 避免被取消的传送也触发更新。监听器不取消事件。</p>
      *
+     * <p>调度策略：通过 {@link Scheduler#runAtEntityLater} 延迟 1 tick 绑定玩家所在 region，
+     * Folia 上确保回调内对玩家 API 的调用（tracker.showTo/hideFrom 发包等）线程安全。
+     * 1 tick 延迟确保玩家 location 已更新到最终位置（PlayerTeleportEvent 触发时
+     * location 可能仍为旧值）。</p>
+     *
      * @param event 传送事件
      */
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerTeleport(PlayerTeleportEvent event) {
         Player player = event.getPlayer();
-        Bukkit.getScheduler().runTask(plugin, () -> tracker.updatePlayerVisibility(player));
+        scheduler.runAtEntityLater(player, () -> tracker.updatePlayerVisibility(player), 1L);
     }
 
     /**
@@ -77,7 +85,7 @@ public final class PlayerTrackerListener implements Listener {
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerChangedWorld(PlayerChangedWorldEvent event) {
         Player player = event.getPlayer();
-        Bukkit.getScheduler().runTask(plugin, () -> tracker.updatePlayerVisibility(player));
+        scheduler.runAtEntityLater(player, () -> tracker.updatePlayerVisibility(player), 1L);
     }
 
     /**
@@ -91,6 +99,6 @@ public final class PlayerTrackerListener implements Listener {
     @EventHandler(priority = EventPriority.MONITOR)
     public void onPlayerJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
-        Bukkit.getScheduler().runTask(plugin, () -> tracker.updatePlayerVisibility(player));
+        scheduler.runAtEntityLater(player, () -> tracker.updatePlayerVisibility(player), 1L);
     }
 }

@@ -61,6 +61,24 @@ public final class ReflectUtil {
     }
 
     /**
+     * 通过全限定名加载类，找不到时返回 null（不抛异常）。
+     *
+     * <p>用于版本可选类的容错加载：某些 NMS 类仅在特定版本存在
+     * （如 {@code PositionMoveRotation} 仅 1.21.2+ 存在），
+     * 调用方需自行 null 检查并按版本分支处理。</p>
+     *
+     * @param className 全限定类名
+     * @return 类对象，或 null 表示当前服务端不存在该类
+     */
+    public static Class<?> getClassOrNull(String className) {
+        try {
+            return Class.forName(className);
+        } catch (ClassNotFoundException e) {
+            return null;
+        }
+    }
+
+    /**
      * 通过全限定名加载类，返回泛型类型。
      *
      * @param className 全限定类名

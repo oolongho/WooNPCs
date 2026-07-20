@@ -1,6 +1,5 @@
 package com.oolongho.woonpc.gui;
 
-import com.oolongho.woonpc.WooNPCs;
 import com.oolongho.woonpc.api.Npc;
 import com.oolongho.woonpc.api.NpcManager;
 import com.oolongho.woonpc.npc.NpcEffect;
@@ -64,39 +63,29 @@ public final class NpcEffectsEditGui extends GuiScreen {
             Material.GLOWSTONE_DUST     // GLOWING
     };
 
-    @SuppressWarnings("unused")
-    private final WooNPCs plugin;
     private final NpcManager npcManager;
     private final NpcStorage storage;
     private final GuiManager guiManager;
-    @SuppressWarnings("unused")
-    private final ChatInputManager chatInputManager;
     private final UUID npcId;
 
     /**
      * 构造 NPC 效果编辑 GUI。
      *
-     * @param plugin           插件实例
      * @param npcManager       NPC 管理器
      * @param storage          NPC 持久化存储
      * @param guiManager       GUI 管理器（返回导航）
-     * @param chatInputManager 聊天输入管理器（保留扩展用，当前未使用）
      * @param npcId            目标 NPC 的 UUID
      * @param parent           父级 GUI（通常为 NpcDetailGui）
      */
-    public NpcEffectsEditGui(@NotNull WooNPCs plugin,
-                             @NotNull NpcManager npcManager,
+    public NpcEffectsEditGui(@NotNull NpcManager npcManager,
                              @NotNull NpcStorage storage,
                              @NotNull GuiManager guiManager,
-                             @NotNull ChatInputManager chatInputManager,
                              @NotNull UUID npcId,
                              @Nullable GuiScreen parent) {
         super("<dark_aqua>NPC 效果编辑", SIZE, parent);
-        this.plugin = Objects.requireNonNull(plugin, "plugin cannot be null");
         this.npcManager = Objects.requireNonNull(npcManager, "npcManager cannot be null");
         this.storage = Objects.requireNonNull(storage, "storage cannot be null");
         this.guiManager = Objects.requireNonNull(guiManager, "guiManager cannot be null");
-        this.chatInputManager = Objects.requireNonNull(chatInputManager, "chatInputManager cannot be null");
         this.npcId = Objects.requireNonNull(npcId, "npcId cannot be null");
     }
 

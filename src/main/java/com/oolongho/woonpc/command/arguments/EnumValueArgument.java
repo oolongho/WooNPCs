@@ -62,4 +62,22 @@ public final class EnumValueArgument {
         }
         return result;
     }
+
+    /**
+     * 列出枚举所有合法值（小写，逗号分隔），用于命令错误提示。
+     *
+     * @param enumClass 枚举类型
+     * @param <E>       枚举泛型
+     * @return 形如 {@code "a, b, c"} 的字符串
+     */
+    public static <E extends Enum<E>> String allowedValues(Class<E> enumClass) {
+        StringBuilder sb = new StringBuilder();
+        for (E e : enumClass.getEnumConstants()) {
+            if (sb.length() > 0) {
+                sb.append(", ");
+            }
+            sb.append(e.name().toLowerCase(Locale.ROOT));
+        }
+        return sb.toString();
+    }
 }

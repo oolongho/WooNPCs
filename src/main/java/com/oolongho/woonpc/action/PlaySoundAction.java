@@ -5,6 +5,8 @@ import com.oolongho.woonpc.api.actions.NpcAction;
 import org.bukkit.Sound;
 import org.jetbrains.annotations.ApiStatus;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -73,6 +75,15 @@ public final class PlaySoundAction extends NpcAction {
     @Override
     public String typeId() {
         return "play_sound";
+    }
+
+    @Override
+    public Map<String, String> serialize() {
+        Map<String, String> map = new LinkedHashMap<>();
+        map.put("sound", sound.name());
+        map.put("volume", Float.toString(volume));
+        map.put("pitch", Float.toString(pitch));
+        return map;
     }
 
     @Override

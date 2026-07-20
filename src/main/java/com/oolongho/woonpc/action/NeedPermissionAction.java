@@ -4,6 +4,8 @@ import com.oolongho.woonpc.api.actions.ActionContext;
 import com.oolongho.woonpc.api.actions.NpcAction;
 import org.jetbrains.annotations.ApiStatus;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -45,6 +47,13 @@ public final class NeedPermissionAction extends NpcAction {
     @Override
     public String typeId() {
         return "need_permission";
+    }
+
+    @Override
+    public Map<String, String> serialize() {
+        Map<String, String> map = new LinkedHashMap<>();
+        map.put("permission", permission);
+        return map;
     }
 
     @Override

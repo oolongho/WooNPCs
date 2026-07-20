@@ -7,6 +7,7 @@ import com.oolongho.woonpc.event.NpcInteractEvent;
 import com.oolongho.woonpc.nms.util.ReflectUtil;
 import com.oolongho.woonpc.nms.util.WooNPCsReflectException;
 import com.oolongho.woonpc.npc.ClickType;
+import com.oolongho.woonpc.util.Scheduler;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
@@ -88,6 +89,7 @@ public final class NpcInteractListener implements Listener {
 
     private final WooNPCs plugin;
     private final NpcManager npcManager;
+    private final Scheduler scheduler;
 
     /** 已注入玩家的 Channel 跟踪表，避免重复注入 + 支持 unregister 时批量清理 */
     private final Map<Player, Channel> playerChannels = new ConcurrentHashMap<>();
@@ -97,10 +99,12 @@ public final class NpcInteractListener implements Listener {
      *
      * @param plugin     插件实例
      * @param npcManager NPC 管理器（用于按 entityId 查询 NPC）
+     * @param scheduler  调度器（Netty I/O 线程切回主线程使用）
      */
-    public NpcInteractListener(WooNPCs plugin, NpcManager npcManager) {
+    public NpcInteractListener(WooNPCs plugin, NpcManager npcManager, Scheduler scheduler) {
         this.plugin = Objects.requireNonNull(plugin, "plugin cannot be null");
         this.npcManager = Objects.requireNonNull(npcManager, "npcManager cannot be null");
+        this.scheduler = Objects.requireNonNull(scheduler, "scheduler cannot be null");
     }
 
     // ==================== 生命周期 ====================
@@ -293,8 +297,9 @@ public final class NpcInteractListener implements Listener {
             String actionTypeName = action.getClass().getSimpleName();
             boolean isAttack = actionTypeName.startsWith("Attack");
 
-            // 调度到主线程：Bukkit API（player.isSneaking、事件触发）必须主线程调用
-            Bukkit.getScheduler().runTask(plugin, () -> handleInteract(player, entityId, isAttack));
+            // 调度到玩家所在 region：Folia 上 handleInteract 内调用 player.isSneaking / npc.interact
+            // → ActionManager.execute → player.performCommand 等玩家 API 必须在玩家 region
+            scheduler.runAtEntity(player, () -> handleInteract(player, entityId, isAttack));
         } catch (WooNPCsReflectException e) {
             // 字段名变化等反射失败：记录 warning，不处理该次交互，不中断后续包
             plugin.getLogger().warning(() -> "解析交互包失败（字段名可能变化）: " + e.getMessage());

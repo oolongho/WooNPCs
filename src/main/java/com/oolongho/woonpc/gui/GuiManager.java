@@ -20,7 +20,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * GUI 管理器：管理玩家当前打开的 GUI，监听 Inventory 事件并委托给 {@link GuiScreen}。
  *
- * <p>由 Task 10 在 {@link WooNPCs} 主类装配时注册为 Listener。</p>
+ * <p>由 {@link WooNPCs} 主类在 onEnable 阶段注册为 Listener。</p>
  *
  * <h2>核心职责</h2>
  * <ul>
@@ -33,7 +33,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * <ul>
  *   <li>{@link InventoryClickEvent}：{@link EventPriority#HIGH} — 取消事件 + 委托 handleClick</li>
  *   <li>{@link InventoryCloseEvent}：{@link EventPriority#MONITOR} — 从 openGuis 移除（不取消）</li>
- *   <li>{@link InventoryDragEvent}：{@link EventPriority#HIGH} — 取消事件（装备编辑在 Task 5 单独处理）</li>
+ *   <li>{@link InventoryDragEvent}：{@link EventPriority#HIGH} — 取消事件（装备编辑 GUI 自行处理 drag）</li>
  * </ul>
  *
  * <h2>线程安全</h2>
@@ -168,7 +168,7 @@ public final class GuiManager implements Listener {
     /**
      * Inventory 拖拽事件：取消事件（GUI 不允许拖拽）。
      *
-     * <p>装备编辑 GUI（Task 5）如需支持拖拽放入，将在子类中单独处理。</p>
+     * <p>装备编辑 GUI 如需支持拖拽放入，将在子类中单独处理。</p>
      *
      * @param event InventoryDragEvent
      */

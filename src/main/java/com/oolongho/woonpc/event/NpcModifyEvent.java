@@ -14,7 +14,7 @@ import org.jetbrains.annotations.Nullable;
  * <p>当 NPC 的某个可同步字段（{@link NpcField}）被修改时触发。本事件<b>可取消</b>，
  * 取消后修改不会应用到 NPC 的内部数据快照。</p>
  *
- * <p>触发时机：在 {@link Npc} 的 setter 方法（命令系统 / Task 14 GUI 系统）中，
+ * <p>触发时机：在 {@link Npc} 的 setter 方法（命令系统 / GUI 系统）中，
  * 修改 data 前触发；未取消时执行 {@code data = data.withXxx(newValue)} 并标记 dirty。</p>
  *
  * <p>事件触发由 {@code NpcImpl#modify} 实现：先在 synchronized 块外触发事件（避免持锁调用监听器），

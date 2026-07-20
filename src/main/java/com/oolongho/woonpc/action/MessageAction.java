@@ -6,6 +6,8 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.jetbrains.annotations.ApiStatus;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -47,6 +49,13 @@ public final class MessageAction extends NpcAction {
     @Override
     public String typeId() {
         return "message";
+    }
+
+    @Override
+    public Map<String, String> serialize() {
+        Map<String, String> map = new LinkedHashMap<>();
+        map.put("message", message);
+        return map;
     }
 
     @Override

@@ -72,8 +72,16 @@ public final class PacketFactory {
             ReflectUtil.getClass("net.minecraft.network.syncher.EntityDataAccessor");
     private static final Class<?> PAIR_CLASS =
             ReflectUtil.getClass("com.mojang.datafixers.util.Pair");
+
+    /**
+     * {@code PositionMoveRotation} 反射类缓存。
+     *
+     * <p><b>版本可选</b>：仅 1.21.2+ 存在；1.21.0-1.21.1 为 null。
+     * {@link #createTeleportPacket} 按本字段是否为 null 分支：
+     * 非 null 走 4 参公开构造器，null 走 STREAM_CODEC.decode 路径。</p>
+     */
     private static final Class<?> POSITION_MOVE_ROTATION_CLASS =
-            ReflectUtil.getClass("net.minecraft.world.entity.PositionMoveRotation");
+            ReflectUtil.getClassOrNull("net.minecraft.world.entity.PositionMoveRotation");
 
     // ==================== Netty Unpooled 反射缓存（ByteBuf 创建用） ====================
 
@@ -106,6 +114,12 @@ public final class PacketFactory {
             ReflectUtil.getClass("net.minecraft.network.protocol.game.ClientboundSetEquipmentPacket");
     private static final Class<?> BUNDLE_PACKET_CLASS =
             ReflectUtil.getClass("net.minecraft.network.protocol.game.ClientboundBundlePacket");
+    private static final Class<?> UPDATE_ATTRIBUTES_PACKET_CLASS =
+            ReflectUtil.getClass("net.minecraft.network.protocol.game.ClientboundUpdateAttributesPacket");
+    private static final Class<?> ATTRIBUTE_SNAPSHOT_CLASS =
+            ReflectUtil.getClass("net.minecraft.network.protocol.game.ClientboundUpdateAttributesPacket$AttributeSnapshot");
+    private static final Class<?> ATTRIBUTES_CLASS =
+            ReflectUtil.getClass("net.minecraft.world.entity.ai.attributes.Attributes");
 
     // ==================== CraftPlayer / ServerPlayer ====================
 
@@ -133,6 +147,12 @@ public final class PacketFactory {
 
     private static final Object GAME_TYPE_SURVIVAL =
             ReflectUtil.getFieldValue(GAME_TYPE_CLASS, "SURVIVAL");
+
+    /**
+     * {@code Attributes.SCALE} 静态字段值（{@code Holder<Attribute>}）。
+     * 1.21.2+ 全部支持；若某版本无此字段（理论不存在），缓存为 null，发包时跳过。
+     */
+    private static final Object SCALE_ATTRIBUTE_HOLDER = getStaticFieldOrNull(ATTRIBUTES_CLASS, "SCALE");
 
     // ==================== Component.literal 缓存 ====================
 
@@ -261,7 +281,11 @@ public final class PacketFactory {
      * 创建添加玩家实体包。
      *
      * <p>对应 {@code ClientboundAddEntityPacket}，使客户端生成玩家型实体。
-     * 使用 1.21.2+ 的 11 参数构造器（含 headYaw）。</p>
+     * 使用 11 参数构造器（含 headYaw）。</p>
+     *
+     * <p><b>版本自适应</b>：第 11 参（headYaw）类型在版本间存在差异，
+     * 1.21.2+ 为 {@code float}，1.21.0-1.21.1 为 {@code double}。
+     * 通过扫描 11 参构造器并按实际参数类型装箱 headYaw 实现。</p>
      *
      * @param entityId 数据包实体 ID
      * @param uuid     NPC 的 UUID
@@ -269,18 +293,14 @@ public final class PacketFactory {
      * @return NMS AddEntityPacket 实例
      */
     public static Object createAddPlayerPacket(int entityId, UUID uuid, Location location) {
-        return ReflectUtil.newInstance(ADD_ENTITY_PACKET_CLASS,
-                new Class[]{int.class, UUID.class, double.class, double.class, double.class,
-                        float.class, float.class, ENTITY_TYPE_CLASS, int.class, VEC3_CLASS, float.class},
-                entityId, uuid, location.getX(), location.getY(), location.getZ(),
-                location.getPitch(), location.getYaw(), PLAYER_ENTITY_TYPE, 0, VEC3_ZERO, location.getYaw());
+        return createAddEntityPacket(entityId, uuid, location, PLAYER_ENTITY_TYPE);
     }
 
     /**
      * 创建 TextDisplay 添加实体包（用于显示名）。
      *
      * <p>spawn 在 NPC 头顶，通过 TextDisplay 实体的 DATA_TEXT_ID 元数据显示文本。
-     * 复用 {@link #createAddPlayerPacket} 的构造逻辑，仅替换 EntityType。</p>
+     * 复用 {@link #createAddEntityPacket} 的构造逻辑，仅替换 EntityType。</p>
      *
      * @param entityId  TextDisplay 实体 ID
      * @param uuid      TextDisplay 的 UUID（独立于 NPC UUID）
@@ -288,11 +308,40 @@ public final class PacketFactory {
      * @return NMS AddEntityPacket 实例
      */
     public static Object createAddTextDisplayPacket(int entityId, UUID uuid, Location location) {
-        return ReflectUtil.newInstance(ADD_ENTITY_PACKET_CLASS,
-                new Class[]{int.class, UUID.class, double.class, double.class, double.class,
-                        float.class, float.class, ENTITY_TYPE_CLASS, int.class, VEC3_CLASS, float.class},
-                entityId, uuid, location.getX(), location.getY(), location.getZ(),
-                location.getPitch(), location.getYaw(), TEXT_DISPLAY_ENTITY_TYPE, 0, VEC3_ZERO, location.getYaw());
+        return createAddEntityPacket(entityId, uuid, location, TEXT_DISPLAY_ENTITY_TYPE);
+    }
+
+    /**
+     * 构造 AddEntityPacket 的共享逻辑（11 参构造器）。
+     *
+     * <p>扫描所有 declared constructors 找 11 参签名，按第 11 参的实际类型
+     * （float 或 double）装箱 headYaw 后反射调用。其余参数顺序固定为：
+     * {@code (int, UUID, double, double, double, float, float, EntityType, int, Vec3, headYaw)}。</p>
+     */
+    private static Object createAddEntityPacket(int entityId, UUID uuid, Location location,
+                                                 Object entityType) {
+        float yaw = location.getYaw();
+        float pitch = location.getPitch();
+        for (Constructor<?> ctor : ADD_ENTITY_PACKET_CLASS.getDeclaredConstructors()) {
+            if (ctor.getParameterCount() != 11) {
+                continue;
+            }
+            Class<?>[] paramTypes = ctor.getParameterTypes();
+            // 第 11 参（headYaw）类型可能是 float（1.21.2+）或 double（1.21.0-1.21.1）
+            if (paramTypes[10] != float.class && paramTypes[10] != double.class) {
+                continue;
+            }
+            ctor.setAccessible(true);
+            Object headYawArg = paramTypes[10] == float.class ? yaw : (double) yaw;
+            try {
+                return ctor.newInstance(entityId, uuid, location.getX(), location.getY(),
+                        location.getZ(), pitch, yaw, entityType, 0, VEC3_ZERO, headYawArg);
+            } catch (ReflectiveOperationException e) {
+                throw new WooNPCsReflectException("Failed to construct ClientboundAddEntityPacket", e);
+            }
+        }
+        throw new WooNPCsReflectException(
+                "No 11-param constructor found in ClientboundAddEntityPacket");
     }
 
     /**
@@ -345,7 +394,15 @@ public final class PacketFactory {
      * 创建实体传送包。
      *
      * <p>对应 {@code ClientboundTeleportEntityPacket}，用于大幅位移（跨区块或初次定位）。
-     * 使用 1.21+ 的公开构造器 {@code (int, PositionMoveRotation, Set<Relative>, boolean)}。</p>
+     * 版本自适应：</p>
+     * <ul>
+     *   <li>1.21.2+（{@code PositionMoveRotation} 类存在）：使用 4 参公开构造器
+     *       {@code (int, PositionMoveRotation, Set<Relative>, boolean)}</li>
+     *   <li>1.21.0-1.21.1（{@code PositionMoveRotation} 类不存在）：通过
+     *       {@code STREAM_CODEC.decode(FriendlyByteBuf)} 构造，buf 内容为
+     *       {@code writeVarInt(id) + 3×writeDouble(xyz) + 2×writeByte(yaw,pitch) + writeBoolean(onGround)}，
+     *       与 {@code WooHolograms/LegacyEntityPacketHelper} 风格一致</li>
+     * </ul>
      *
      * @param entityId  目标实体 ID
      * @param location  目标位置
@@ -353,15 +410,31 @@ public final class PacketFactory {
      * @return NMS TeleportEntityPacket 实例
      */
     public static Object createTeleportPacket(int entityId, Location location, boolean onGround) {
-        Object position = ReflectUtil.newInstance(VEC3_CLASS,
-                new Class[]{double.class, double.class, double.class},
-                location.getX(), location.getY(), location.getZ());
-        Object movement = ReflectUtil.newInstance(POSITION_MOVE_ROTATION_CLASS,
-                new Class[]{VEC3_CLASS, VEC3_CLASS, float.class, float.class},
-                position, VEC3_ZERO, location.getYaw(), location.getPitch());
-        return ReflectUtil.newInstance(TELEPORT_PACKET_CLASS,
-                new Class[]{int.class, POSITION_MOVE_ROTATION_CLASS, Set.class, boolean.class},
-                entityId, movement, Set.of(), onGround);
+        // 1.21.2+：4 参公开构造器
+        if (POSITION_MOVE_ROTATION_CLASS != null) {
+            Object position = ReflectUtil.newInstance(VEC3_CLASS,
+                    new Class[]{double.class, double.class, double.class},
+                    location.getX(), location.getY(), location.getZ());
+            Object movement = ReflectUtil.newInstance(POSITION_MOVE_ROTATION_CLASS,
+                    new Class[]{VEC3_CLASS, VEC3_CLASS, float.class, float.class},
+                    position, VEC3_ZERO, location.getYaw(), location.getPitch());
+            return ReflectUtil.newInstance(TELEPORT_PACKET_CLASS,
+                    new Class[]{int.class, POSITION_MOVE_ROTATION_CLASS, Set.class, boolean.class},
+                    entityId, movement, Set.of(), onGround);
+        }
+
+        // 1.21.0-1.21.1：STREAM_CODEC.decode(FriendlyByteBuf) 路径
+        Object buf = createRegistryFriendlyByteBuf();
+        ReflectUtil.invokeMethod(buf, "writeVarInt", entityId);
+        ReflectUtil.invokeMethod(buf, "writeDouble", location.getX());
+        ReflectUtil.invokeMethod(buf, "writeDouble", location.getY());
+        ReflectUtil.invokeMethod(buf, "writeDouble", location.getZ());
+        ReflectUtil.invokeMethod(buf, "writeByte",
+                (byte) (location.getYaw() * 256.0f / 360.0f));
+        ReflectUtil.invokeMethod(buf, "writeByte",
+                (byte) (location.getPitch() * 256.0f / 360.0f));
+        ReflectUtil.invokeMethod(buf, "writeBoolean", onGround);
+        return decodeViaStreamCodec(TELEPORT_PACKET_CLASS, buf);
     }
 
     /**
@@ -407,6 +480,31 @@ public final class PacketFactory {
         }
         return ReflectUtil.newInstance(SET_EQUIPMENT_PACKET_CLASS,
                 new Class[]{int.class, List.class}, entityId, pairList);
+    }
+
+    // ==================== 属性包 ====================
+
+    /**
+     * 创建实体缩放属性更新包。
+     *
+     * <p>对应 {@code ClientboundUpdateAttributesPacket}，通过 {@code minecraft:scale} 属性
+     * 设置玩家型 NPC 的缩放比例。1.21+ 玩家实体的缩放只能通过 attribute 包发送，
+     * metadata 中无对应索引。</p>
+     *
+     * <p>若当前服务端版本无 {@code Attributes.SCALE} 字段（不支持），
+     * 返回 null，调用方应跳过发包。</p>
+     *
+     * @param entityId 目标实体 ID
+     * @param scale    缩放比例（1.0 = 原始大小）
+     * @return NMS UpdateAttributesPacket 实例，或 null 表示本版本不支持
+     */
+    public static @Nullable Object createScaleAttributePacket(int entityId, float scale) {
+        if (SCALE_ATTRIBUTE_HOLDER == null) {
+            return null;
+        }
+        Object snapshot = createAttributeSnapshot(SCALE_ATTRIBUTE_HOLDER, scale);
+        return ReflectUtil.newInstance(UPDATE_ATTRIBUTES_PACKET_CLASS,
+                new Class[]{int.class, List.class}, entityId, List.of(snapshot));
     }
 
     // ==================== 包发送 ====================
@@ -517,28 +615,41 @@ public final class PacketFactory {
     /**
      * 创建 PlayerInfoUpdatePacket.Entry 实例。
      *
-     * <p>1.21+ Entry 签名：(UUID, GameProfile, listed, latency, GameType, displayName, showHat, listOrder, chatSession)
-     * chatSession 传 null 表示无聊天会话。通过扫描构造器按参数数量匹配，避免 chatSession
-     * 类型在不同版本间的差异（RemoteChatSession.Data 等）。</p>
+     * <p>版本自适应：扫描构造器按参数数量分支。</p>
+     * <ul>
+     *   <li>1.21.2+（9 参）：{@code (UUID, GameProfile, listed, latency, GameType, displayName,
+     *       showHat, listOrder, chatSession)} —— 多 {@code showHat} 与 {@code listOrder} 两项</li>
+     *   <li>1.21.0-1.21.1（7 参）：{@code (UUID, GameProfile, listed, latency, GameType,
+     *       displayName, chatSession)} —— 无 showHat / listOrder</li>
+     * </ul>
      *
-     * <p><b>listOrder = -1</b>：与 fancynpcs-v2 对齐，-1 表示不强制排序，避免
-     * 与真实玩家在 tab 列表中的相对位置产生不一致行为。</p>
+     * <p>chatSession 传 null 表示无聊天会话。{@code listOrder = -1} 与 fancynpcs-v2 对齐，
+     * 表示不强制排序，避免与真实玩家在 tab 列表中的相对位置产生不一致行为。</p>
      */
     private static Object createPlayerInfoEntry(UUID uuid, Object gameProfile,
                                                 boolean listed, int latency,
                                                 @Nullable Object displayName) {
         for (Constructor<?> ctor : PLAYER_INFO_ENTRY_CLASS.getDeclaredConstructors()) {
-            if (ctor.getParameterCount() == 9) {
-                ctor.setAccessible(true);
-                try {
+            int pc = ctor.getParameterCount();
+            if (pc != 9 && pc != 7) {
+                continue;
+            }
+            ctor.setAccessible(true);
+            try {
+                if (pc == 9) {
+                    // 1.21.2+: 多 showHat、listOrder 参数
                     return ctor.newInstance(uuid, gameProfile, listed, latency,
                             GAME_TYPE_SURVIVAL, displayName, true, -1, null);
-                } catch (ReflectiveOperationException e) {
-                    throw new WooNPCsReflectException("Failed to construct PlayerInfoUpdatePacket.Entry", e);
                 }
+                // 1.21.0-1.21.1: 7 参构造器
+                return ctor.newInstance(uuid, gameProfile, listed, latency,
+                        GAME_TYPE_SURVIVAL, displayName, null);
+            } catch (ReflectiveOperationException e) {
+                throw new WooNPCsReflectException("Failed to construct PlayerInfoUpdatePacket.Entry", e);
             }
         }
-        throw new WooNPCsReflectException("No 9-param constructor found in PlayerInfoUpdatePacket.Entry");
+        throw new WooNPCsReflectException(
+                "No 7/9-param constructor found in PlayerInfoUpdatePacket.Entry");
     }
 
     /**
@@ -647,6 +758,45 @@ public final class PacketFactory {
             return asNmsCopy.invoke(null, bukkitItem);
         } catch (ReflectiveOperationException e) {
             throw new WooNPCsReflectException("Failed to convert ItemStack to NMS", e);
+        }
+    }
+
+    /**
+     * 构造 NMS {@code AttributeSnapshot} 实例。
+     *
+     * <p>1.21+ 的 AttributeSnapshot 构造器签名为 {@code (Holder<Attribute>, double, List<AttributeModifier>)}，
+     * 由于不同小版本间该类可能在 record 与普通类之间切换，此处扫描 declared constructors
+     * 找到 3 参数者使用，避免硬编码形参类型导致版本不兼容。</p>
+     *
+     * @param attributeHolder 属性 Holder（来自 {@code Attributes.XXX} 静态字段）
+     * @param baseValue       基础值
+     * @return AttributeSnapshot 实例
+     */
+    private static Object createAttributeSnapshot(Object attributeHolder, double baseValue) {
+        for (Constructor<?> ctor : ATTRIBUTE_SNAPSHOT_CLASS.getDeclaredConstructors()) {
+            if (ctor.getParameterCount() == 3) {
+                ctor.setAccessible(true);
+                try {
+                    return ctor.newInstance(attributeHolder, baseValue, List.of());
+                } catch (ReflectiveOperationException e) {
+                    throw new WooNPCsReflectException(
+                            "Failed to construct AttributeSnapshot", e);
+                }
+            }
+        }
+        throw new WooNPCsReflectException(
+                "No 3-param constructor found in AttributeSnapshot");
+    }
+
+    /**
+     * 安全读取静态字段：找不到时返回 null（不抛异常）。
+     * 用于可选字段（如 {@code Attributes.SCALE} 在某些版本可能不存在）。
+     */
+    private static @Nullable Object getStaticFieldOrNull(Class<?> clazz, String fieldName) {
+        try {
+            return ReflectUtil.getFieldValue(clazz, fieldName);
+        } catch (WooNPCsReflectException e) {
+            return null;
         }
     }
 }

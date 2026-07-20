@@ -8,6 +8,7 @@ import com.oolongho.woonpc.api.NpcManager;
 import com.oolongho.woonpc.api.SkinManager;
 import com.oolongho.woonpc.skin.SkinData;
 import com.oolongho.woonpc.storage.NpcStorage;
+import com.oolongho.woonpc.util.Scheduler;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
@@ -42,7 +43,7 @@ import java.util.UUID;
  *
  * <h2>异步回调线程切换</h2>
  * <p>{@link SkinManager#getSkin} 的回调在异步线程执行，必须通过
- * {@code Bukkit.getScheduler().runTask(plugin, ...)} 切回主线程后才能调用
+ * {@link Scheduler#runSync} 切回主线程后才能调用
  * Bukkit API 与 NPC setter（数据包发送非线程安全）。</p>
  *
  * @author oolongho
@@ -59,6 +60,7 @@ public final class NpcSkinEditGui extends GuiScreen {
     private final SkinManager skinManager;
     private final GuiManager guiManager;
     private final ChatInputManager chatInputManager;
+    private final Scheduler scheduler;
     private final UUID npcId;
 
     /**
@@ -70,6 +72,7 @@ public final class NpcSkinEditGui extends GuiScreen {
      * @param skinManager      皮肤管理器（异步获取玩家皮肤）
      * @param guiManager       GUI 管理器（返回导航）
      * @param chatInputManager 聊天输入管理器（texture / signature / 玩家名输入）
+     * @param scheduler        调度器（异步皮肤回调切回主线程使用）
      * @param npcId            目标 NPC 的 UUID
      * @param parent           父级 GUI（通常为 NpcDetailGui）
      */
@@ -79,6 +82,7 @@ public final class NpcSkinEditGui extends GuiScreen {
                           @NotNull SkinManager skinManager,
                           @NotNull GuiManager guiManager,
                           @NotNull ChatInputManager chatInputManager,
+                          @NotNull Scheduler scheduler,
                           @NotNull UUID npcId,
                           @Nullable GuiScreen parent) {
         super("<dark_aqua>NPC 皮肤编辑", SIZE, parent);
@@ -88,6 +92,7 @@ public final class NpcSkinEditGui extends GuiScreen {
         this.skinManager = Objects.requireNonNull(skinManager, "skinManager cannot be null");
         this.guiManager = Objects.requireNonNull(guiManager, "guiManager cannot be null");
         this.chatInputManager = Objects.requireNonNull(chatInputManager, "chatInputManager cannot be null");
+        this.scheduler = Objects.requireNonNull(scheduler, "scheduler cannot be null");
         this.npcId = Objects.requireNonNull(npcId, "npcId cannot be null");
     }
 
@@ -148,7 +153,7 @@ public final class NpcSkinEditGui extends GuiScreen {
                                 storage.save(npc);
                                 p.sendMessage(MM.deserialize("<green>皮肤 texture 已更新。"));
                                 guiManager.openGui(p, new NpcSkinEditGui(plugin, npcManager, storage,
-                                        skinManager, guiManager, chatInputManager, npcId, parent));
+                                        skinManager, guiManager, chatInputManager, scheduler, npcId, parent));
                             });
                 })
                 .build());
@@ -178,7 +183,7 @@ public final class NpcSkinEditGui extends GuiScreen {
                                 storage.save(npc);
                                 p.sendMessage(MM.deserialize("<green>皮肤 signature 已更新。"));
                                 guiManager.openGui(p, new NpcSkinEditGui(plugin, npcManager, storage,
-                                        skinManager, guiManager, chatInputManager, npcId, parent));
+                                        skinManager, guiManager, chatInputManager, scheduler, npcId, parent));
                             });
                 })
                 .build());
@@ -195,9 +200,10 @@ public final class NpcSkinEditGui extends GuiScreen {
                             ChatInputManager.InputType.PLAYER_NAME,
                             playerName -> {
                                 p.sendMessage(MM.deserialize("<yellow>正在异步获取 <aqua>" + playerName + " <yellow>的皮肤..."));
-                                // SkinManager 回调在异步线程执行，所有 Bukkit API / NPC 写操作必须切回主线程
+                                // SkinManager 回调在异步线程执行，所有 Bukkit API / NPC 写操作必须切回玩家所在 region
+                                // Folia 上 setSkin/openGui/save 等调用涉及玩家 API，需在玩家 region
                                 skinManager.getSkin(playerName, skinData -> {
-                                    Bukkit.getScheduler().runTask(plugin, () -> {
+                                    scheduler.runAtEntity(p, () -> {
                                         // 切回主线程后再次校验 NPC 是否仍存在
                                         Optional<Npc> cur = npcManager.getById(npcId);
                                         if (cur.isEmpty()) {
@@ -209,7 +215,7 @@ public final class NpcSkinEditGui extends GuiScreen {
                                         storage.save(current);
                                         p.sendMessage(MM.deserialize("<green>皮肤已更新。"));
                                         guiManager.openGui(p, new NpcSkinEditGui(plugin, npcManager, storage,
-                                                skinManager, guiManager, chatInputManager, npcId, parent));
+                                                skinManager, guiManager, chatInputManager, scheduler, npcId, parent));
                                     });
                                 });
                             });

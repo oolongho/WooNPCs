@@ -4,18 +4,11 @@ main: com.oolongho.woonpc.WooNPCs
 api-version: '1.21'
 folia-supported: true
 author: oolongho
-description: WooNPCs
+description: 基于 Paper/Folia 1.21+ 的高性能数据包 NPC 插件
 
-dependencies:
-  server:
-    WooHolograms:
-      load: BEFORE
-      required: false
-      join-classpath: true
-    PlaceholderAPI:
-      load: BEFORE
-      required: false
-      join-classpath: true
+softdepend:
+  - WooHolograms
+  - PlaceholderAPI
 
 commands:
   woonpc:
@@ -26,5 +19,8 @@ commands:
 
 permissions:
   woonpc.admin:
-    description: 管理员权限
+    description: 管理员权限（执行 /woonpc 命令的入口校验）
+    default: op
+  woonpc.gui:
+    description: 打开 GUI 管理面板权限（/woonpc gui 子命令独立校验）
     default: op

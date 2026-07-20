@@ -17,6 +17,7 @@ import com.oolongho.woonpc.npc.NpcPose;
 import com.oolongho.woonpc.skin.SkinData;
 import com.oolongho.woonpc.storage.NpcStorage;
 import com.oolongho.woonpc.util.CommandSafety;
+import com.oolongho.woonpc.util.Scheduler;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -46,7 +47,7 @@ import java.util.UUID;
  * NPC 详情 GUI（54 格，6 行布局）。
  *
  * <p>展示单个 NPC 的全部可配置状态，支持简单字段直接编辑（cycle 切换、数字调整、聊天输入）
- * 与子 GUI 入口（皮肤/装备/动作/效果/权限，对应 Task 4-8）。</p>
+ * 与子 GUI 入口（皮肤/装备/动作/效果/权限）。</p>
  *
  * <h2>布局</h2>
  * <pre>
@@ -99,10 +100,10 @@ public final class NpcDetailGui extends GuiScreen {
     private final NpcManager npcManager;
     private final NpcStorage storage;
     private final ActionManager actionManager;
-    @SuppressWarnings("unused")
     private final SkinManager skinManager;
     private final GuiManager guiManager;
     private final ChatInputManager chatInputManager;
+    private final Scheduler scheduler;
     private final UUID npcId;
     /** NPC 列表快照（不可变），用于 Row 6 同级切换 */
     private final List<UUID> npcList;
@@ -115,9 +116,10 @@ public final class NpcDetailGui extends GuiScreen {
      * @param npcManager       NPC 管理器
      * @param storage          NPC 持久化存储
      * @param actionManager    动作管理器（统计动作数 + 复制时迁移 actions）
-     * @param skinManager      皮肤管理器（预留给 Task 4 子 GUI 使用）
+     * @param skinManager      皮肤管理器（供皮肤子 GUI 使用）
      * @param guiManager       GUI 管理器（打开/返回导航）
      * @param chatInputManager 聊天输入管理器（displayName/复制名称输入）
+     * @param scheduler        调度器（传给子 NpcSkinEditGui / NpcListGui）
      * @param npcId            目标 NPC 的 UUID
      * @param npcList          NPC UUID 列表快照（用于同级切换）
      * @param currentIndex     当前 NPC 在 npcList 中的索引
@@ -130,6 +132,7 @@ public final class NpcDetailGui extends GuiScreen {
                         @NotNull SkinManager skinManager,
                         @NotNull GuiManager guiManager,
                         @NotNull ChatInputManager chatInputManager,
+                        @NotNull Scheduler scheduler,
                         @NotNull UUID npcId,
                         @NotNull List<UUID> npcList,
                         int currentIndex,
@@ -142,6 +145,7 @@ public final class NpcDetailGui extends GuiScreen {
         this.skinManager = Objects.requireNonNull(skinManager, "skinManager cannot be null");
         this.guiManager = Objects.requireNonNull(guiManager, "guiManager cannot be null");
         this.chatInputManager = Objects.requireNonNull(chatInputManager, "chatInputManager cannot be null");
+        this.scheduler = Objects.requireNonNull(scheduler, "scheduler cannot be null");
         this.npcId = Objects.requireNonNull(npcId, "npcId cannot be null");
         this.npcList = List.copyOf(Objects.requireNonNull(npcList, "npcList cannot be null"));
         this.currentIndex = currentIndex;
@@ -257,15 +261,14 @@ public final class NpcDetailGui extends GuiScreen {
         setButton(4, headBuilder.build());
 
         // [5] 状态信息
-        // 注：可见玩家数需通过 NpcController.getVisiblePlayers() 获取，但 Npc.getController() 为 protected，
-        // 外部 GUI 无法访问。此处仅显示实体 ID 与 dirty 字段数；可见玩家数待 Task 7 tracker 完善后扩展。
         int dirtyCount = d.dirtyFields().size();
+        int visibleCount = npc.getVisiblePlayerCount();
         setButton(5, GuiButton.builder(Material.CLOCK)
                 .name("<aqua>状态信息")
                 .lore(List.of(
                         "<gray>实体ID: <yellow>" + npc.getEntityId(),
                         "<gray>dirty 字段数: <yellow>" + dirtyCount,
-                        "<dark_gray>可见玩家数: 待 Task 7 tracker 接入"
+                        "<gray>可见玩家数: <yellow>" + visibleCount
                 ))
                 .build());
 
@@ -293,10 +296,10 @@ public final class NpcDetailGui extends GuiScreen {
                                     storage.delete(id);
                                     p.sendMessage(MM.deserialize("<dark_gray>[<aqua>WooNPCs<dark_gray>] <red>NPC <yellow>" + npc.getName() + " <red>已删除"));
                                     // 删除后构造新的 NpcListGui（不复用 parent，避免持有已删除 NPC 引用）
-                                    guiManager.openGui(p, new NpcListGui(plugin, npcManager, storage, actionManager, skinManager, guiManager, chatInputManager, p));
+                                    guiManager.openGui(p, new NpcListGui(plugin, npcManager, storage, actionManager, skinManager, guiManager, chatInputManager, scheduler, p));
                                 } else {
                                     // 取消时重新打开 NpcDetailGui 让用户继续操作
-                                    guiManager.openGui(p, new NpcDetailGui(plugin, npcManager, storage, actionManager, skinManager, guiManager, chatInputManager, npc.getId(), npcList, currentIndex, parent));
+                                    guiManager.openGui(p, new NpcDetailGui(plugin, npcManager, storage, actionManager, skinManager, guiManager, chatInputManager, scheduler, npc.getId(), npcList, currentIndex, parent));
                                 }
                             },
                             this
@@ -397,7 +400,7 @@ public final class NpcDetailGui extends GuiScreen {
                 .lore(buildEffectLore(d.effects()))
                 .onClick(ctx -> {
                     ctx.player().closeInventory();
-                    guiManager.openGui(ctx.player(), new NpcEffectsEditGui(plugin, npcManager, storage, guiManager, chatInputManager, npc.getId(), this));
+                    guiManager.openGui(ctx.player(), new NpcEffectsEditGui(npcManager, storage, guiManager, npc.getId(), this));
                 })
                 .build());
 
@@ -545,7 +548,7 @@ public final class NpcDetailGui extends GuiScreen {
                 .lore(buildPermissionLore(d.visibilityPermissions()))
                 .onClick(ctx -> {
                     ctx.player().closeInventory();
-                    guiManager.openGui(ctx.player(), new NpcPermissionEditGui(plugin, npcManager, storage, guiManager, chatInputManager, npc.getId(), this));
+                    guiManager.openGui(ctx.player(), new NpcPermissionEditGui(npcManager, storage, guiManager, chatInputManager, npc.getId(), this));
                 })
                 .build());
 
@@ -558,7 +561,7 @@ public final class NpcDetailGui extends GuiScreen {
                 ))
                 .onClick(ctx -> {
                     ctx.player().closeInventory();
-                    guiManager.openGui(ctx.player(), new NpcSkinEditGui(plugin, npcManager, storage, skinManager, guiManager, chatInputManager, npc.getId(), this));
+                    guiManager.openGui(ctx.player(), new NpcSkinEditGui(plugin, npcManager, storage, skinManager, guiManager, chatInputManager, scheduler, npc.getId(), this));
                 })
                 .build());
 
@@ -569,7 +572,7 @@ public final class NpcDetailGui extends GuiScreen {
                 .lore(buildEquipmentLore(d.equipment()))
                 .onClick(ctx -> {
                     ctx.player().closeInventory();
-                    guiManager.openGui(ctx.player(), new NpcEquipmentEditGui(plugin, npcManager, storage, guiManager, chatInputManager, npc.getId(), this));
+                    guiManager.openGui(ctx.player(), new NpcEquipmentEditGui(npcManager, storage, guiManager, npc.getId(), this));
                 })
                 .build());
 
@@ -580,7 +583,7 @@ public final class NpcDetailGui extends GuiScreen {
                 .lore(buildActionLore(npc.getId()))
                 .onClick(ctx -> {
                     ctx.player().closeInventory();
-                    guiManager.openGui(ctx.player(), new NpcActionManageGui(plugin, npcManager, storage, actionManager, guiManager, chatInputManager, npc.getId(), this));
+                    guiManager.openGui(ctx.player(), new NpcActionManageGui(npcManager, actionManager, guiManager, chatInputManager, npc.getId(), this));
                 })
                 .build());
 
@@ -652,7 +655,7 @@ public final class NpcDetailGui extends GuiScreen {
                                     p.sendMessage(MM.deserialize("<green>已复制为 <yellow>" + newName + "<green>。"));
                                     // 切换到新 NPC 的 detail GUI；npcList 不变（保持原列表顺序）
                                     guiManager.openGui(p, new NpcDetailGui(plugin, npcManager, storage,
-                                            actionManager, skinManager, guiManager, chatInputManager,
+                                            actionManager, skinManager, guiManager, chatInputManager, scheduler,
                                             created.getId(), npcList, currentIndex, parent));
                                 } catch (IllegalStateException e) {
                                     p.sendMessage(MM.deserialize("<red>复制失败: " + e.getMessage()));
@@ -681,10 +684,10 @@ public final class NpcDetailGui extends GuiScreen {
                                     storage.save(npc);
                                     p.sendMessage(MM.deserialize("<dark_gray>[<aqua>WooNPCs<dark_gray>] <green>NPC <yellow>" + npc.getName() + " <green>已重置为默认"));
                                     // 重新打开 NpcDetailGui 显示重置后的状态
-                                    guiManager.openGui(p, new NpcDetailGui(plugin, npcManager, storage, actionManager, skinManager, guiManager, chatInputManager, npc.getId(), npcList, currentIndex, parent));
+                                    guiManager.openGui(p, new NpcDetailGui(plugin, npcManager, storage, actionManager, skinManager, guiManager, chatInputManager, scheduler, npc.getId(), npcList, currentIndex, parent));
                                 } else {
                                     // 取消时重新打开 NpcDetailGui 让用户继续操作
-                                    guiManager.openGui(p, new NpcDetailGui(plugin, npcManager, storage, actionManager, skinManager, guiManager, chatInputManager, npc.getId(), npcList, currentIndex, parent));
+                                    guiManager.openGui(p, new NpcDetailGui(plugin, npcManager, storage, actionManager, skinManager, guiManager, chatInputManager, scheduler, npc.getId(), npcList, currentIndex, parent));
                                 }
                             },
                             this
@@ -710,7 +713,7 @@ public final class NpcDetailGui extends GuiScreen {
             prev.onClick(ctx -> {
                 UUID prevId = npcList.get(currentIndex - 1);
                 guiManager.openGui(ctx.player(), new NpcDetailGui(plugin, npcManager, storage,
-                        actionManager, skinManager, guiManager, chatInputManager,
+                        actionManager, skinManager, guiManager, chatInputManager, scheduler,
                         prevId, npcList, currentIndex - 1, parent));
             });
         }
@@ -738,7 +741,7 @@ public final class NpcDetailGui extends GuiScreen {
             next.onClick(ctx -> {
                 UUID nextId = npcList.get(currentIndex + 1);
                 guiManager.openGui(ctx.player(), new NpcDetailGui(plugin, npcManager, storage,
-                        actionManager, skinManager, guiManager, chatInputManager,
+                        actionManager, skinManager, guiManager, chatInputManager, scheduler,
                         nextId, npcList, currentIndex + 1, parent));
             });
         }

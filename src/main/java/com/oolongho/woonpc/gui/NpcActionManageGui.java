@@ -1,6 +1,5 @@
 package com.oolongho.woonpc.gui;
 
-import com.oolongho.woonpc.WooNPCs;
 import com.oolongho.woonpc.action.ConsoleCommandAction;
 import com.oolongho.woonpc.action.MessageAction;
 import com.oolongho.woonpc.action.NeedPermissionAction;
@@ -14,7 +13,6 @@ import com.oolongho.woonpc.api.NpcManager;
 import com.oolongho.woonpc.api.actions.ActionManager;
 import com.oolongho.woonpc.api.actions.ActionTrigger;
 import com.oolongho.woonpc.api.actions.NpcAction;
-import com.oolongho.woonpc.storage.NpcStorage;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
@@ -57,10 +55,9 @@ import java.util.UUID;
  *   <li>{@link #typeSelectMode}：是否在类型选择视图</li>
  * </ul>
  *
- * <h2>A1 警告</h2>
- * <p>所有修改动作的操作（添加/删除/编辑/上移/下移）末尾发送
- * 「动作配置仅内存有效，重启后丢失（持久化将在 Task 16 实现）」提示，
- * 因当前 ActionManager 不持久化（A1 问题延后到 Task 16）。</p>
+ * <h2>持久化</h2>
+ * <p>所有修改动作的操作（添加/删除/编辑/上移/下移）会同步到 {@link ActionManager} 内存状态，
+ * 由 AutoSaveTask 周期保存到 {@code actions.yml}。</p>
  *
  * <h2>无闪烁刷新</h2>
  * <p>继承 {@link GuiScreen#refresh()}：清空按钮与 Inventory 后重新调用 {@link #render()}，
@@ -78,15 +75,7 @@ public final class NpcActionManageGui extends GuiScreen {
     /** 动作列表起始槽位（跳过 Row 1） */
     private static final int START_SLOT = 9;
 
-    /** A1 警告：动作配置仅内存有效（持久化将在 Task 16 实现） */
-    private static final String MEMORY_WARNING =
-            "<yellow>注意: <gray>动作配置仅内存有效，重启后丢失（持久化将在 Task 16 实现）";
-
-    @SuppressWarnings("unused")
-    private final WooNPCs plugin;
     private final NpcManager npcManager;
-    @SuppressWarnings("unused")
-    private final NpcStorage storage;
     private final ActionManager actionManager;
     private final GuiManager guiManager;
     private final ChatInputManager chatInputManager;
@@ -104,27 +93,21 @@ public final class NpcActionManageGui extends GuiScreen {
     /**
      * 构造动作管理 GUI。
      *
-     * @param plugin           插件实例
      * @param npcManager       NPC 管理器
-     * @param storage          NPC 持久化存储（预留，动作暂不持久化）
      * @param actionManager    动作管理器
      * @param guiManager       GUI 管理器（打开/返回导航）
      * @param chatInputManager 聊天输入管理器（用于输入动作参数）
      * @param npcId            目标 NPC 的 UUID
      * @param parent           父级 GUI（通常为 NpcDetailGui）
      */
-    public NpcActionManageGui(@NotNull WooNPCs plugin,
-                              @NotNull NpcManager npcManager,
-                              @NotNull NpcStorage storage,
+    public NpcActionManageGui(@NotNull NpcManager npcManager,
                               @NotNull ActionManager actionManager,
                               @NotNull GuiManager guiManager,
                               @NotNull ChatInputManager chatInputManager,
                               @NotNull UUID npcId,
                               @Nullable GuiScreen parent) {
         super(buildTitle(npcManager, npcId), SIZE, parent);
-        this.plugin = Objects.requireNonNull(plugin, "plugin cannot be null");
         this.npcManager = Objects.requireNonNull(npcManager, "npcManager cannot be null");
-        this.storage = Objects.requireNonNull(storage, "storage cannot be null");
         this.actionManager = Objects.requireNonNull(actionManager, "actionManager cannot be null");
         this.guiManager = Objects.requireNonNull(guiManager, "guiManager cannot be null");
         this.chatInputManager = Objects.requireNonNull(chatInputManager, "chatInputManager cannot be null");
@@ -502,7 +485,6 @@ public final class NpcActionManageGui extends GuiScreen {
             selectedIndex--;
         }
         p.sendMessage(MM.deserialize("<green>动作已删除。"));
-        p.sendMessage(MM.deserialize(MEMORY_WARNING));
         refresh();
     }
 
@@ -536,7 +518,6 @@ public final class NpcActionManageGui extends GuiScreen {
         actions.set(target, tmp);
         actionManager.setActions(npcId, currentTrigger, actions);
         selectedIndex = target;
-        p.sendMessage(MM.deserialize(MEMORY_WARNING));
         refresh();
     }
 
@@ -580,7 +561,6 @@ public final class NpcActionManageGui extends GuiScreen {
                         list.set(idx, newAction);
                         actionManager.setActions(npcId, currentTrigger, list);
                         p.sendMessage(MM.deserialize("<green>动作已更新。"));
-                        p.sendMessage(MM.deserialize(MEMORY_WARNING));
                     }
                     guiManager.openGui(p, this);
                 });
@@ -608,7 +588,6 @@ public final class NpcActionManageGui extends GuiScreen {
         actions.add(newAction);
         actionManager.setActions(npcId, currentTrigger, actions);
         p.sendMessage(MM.deserialize("<green>已添加 <aqua>" + typeId + " <green>动作。"));
-        p.sendMessage(MM.deserialize(MEMORY_WARNING));
         typeSelectMode = false;
         guiManager.openGui(p, this);
     }

@@ -14,7 +14,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <h2>起始值选择</h2>
  * <p>从 {@value #START_ENTITY_ID} 起始，避开服务端 Entity.ENTITY_COUNTER 的常规范围
  * （服务端从 0 开始递增，正常游戏实体 ID 远小于此阈值）。
- * 若服务端实体数量异常庞大可能产生冲突，Task 4 可改为反射访问
+ * 若服务端实体数量异常庞大可能产生冲突，可改为反射访问
  * {@code net.minecraft.world.entity.Entity#ENTITY_COUNTER} 复用服务端计数器。</p>
  *
  * <p>线程安全：{@link AtomicInteger} 保证多线程并发调用 {@link #nextEntityId()} 安全。</p>

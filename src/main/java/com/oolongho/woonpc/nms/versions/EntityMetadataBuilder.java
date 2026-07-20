@@ -42,8 +42,8 @@ import java.util.Optional;
  *
  * <h2>scale 处理</h2>
  * <p>1.21+ 玩家实体的缩放通过 attribute（{@code minecraft:scale}）包发送，
- * 不通过 metadata。{@link NpcData#scale()} 由 {@code NmsAdapter} 实现单独处理
- * （Task 4 暂不实现 attribute 包，留待后续）。</p>
+ * 不通过 metadata。{@link NpcData#scale()} 由 {@code NmsAdapter.updateScale}
+ * 通过 {@code ClientboundUpdateAttributesPacket} 单独发送，本类不处理 scale。</p>
  *
  * @author oolongho
  */

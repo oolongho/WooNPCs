@@ -8,6 +8,8 @@ import com.oolongho.woonpc.api.actions.NpcAction;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.ApiStatus;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -17,12 +19,12 @@ import java.util.Objects;
  * BungeeCord 与 Velocity（兼容模式）均支持 {@code "BungeeCord"} 通道的 {@code Connect} 指令。</p>
  *
  * <h2>通道注册约定</h2>
- * <p>本动作不注册 BungeeCord 通道，由主类 {@code WooNPCs.onEnable} 在 Task 18 装配时
- * 通过 {@code getServer().getMessenger().registerOutgoingPluginChannel(plugin, "BungeeCord")}
+ * <p>本动作不注册 BungeeCord 通道，由主类 {@link WooNPCs#onEnable} 通过
+ * {@code getServer().getMessenger().registerOutgoingPluginChannel(plugin, "BungeeCord")}
  * 注册。</p>
  *
  * <p>执行时若检测到玩家未监听 BungeeCord 通道（即主类未注册），记录 warning 并跳过
- * （返回 true，避免动作链异常中止）。Task 18 装配后此分支不会触发。</p>
+ * （返回 true，避免动作链异常中止）。正常装配后此分支不会触发。</p>
  *
  * <h2>示例配置</h2>
  * <pre>
@@ -59,7 +61,7 @@ public final class SendToServerAction extends NpcAction {
         WooNPCs plugin = context.plugin();
 
         if (!player.getListeningPluginChannels().contains(BUNGEE_CHANNEL)) {
-            plugin.getLogger().warning("SendToServer: BungeeCord channel not registered, skipping (Task 18 will register)");
+            plugin.getLogger().warning("SendToServer: BungeeCord channel not registered, skipping");
             return true;
         }
 
@@ -73,6 +75,13 @@ public final class SendToServerAction extends NpcAction {
     @Override
     public String typeId() {
         return "send_to_server";
+    }
+
+    @Override
+    public Map<String, String> serialize() {
+        Map<String, String> map = new LinkedHashMap<>();
+        map.put("server", serverName);
+        return map;
     }
 
     @Override

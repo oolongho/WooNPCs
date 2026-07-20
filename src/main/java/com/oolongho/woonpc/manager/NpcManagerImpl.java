@@ -5,7 +5,6 @@ import com.oolongho.woonpc.api.NpcData;
 import com.oolongho.woonpc.api.NpcManager;
 import com.oolongho.woonpc.event.NpcCreateEvent;
 import com.oolongho.woonpc.event.NpcDeleteEvent;
-import com.oolongho.woonpc.nms.NmsAdapter;
 import com.oolongho.woonpc.npc.NpcImpl;
 import org.bukkit.Bukkit;
 import org.jetbrains.annotations.ApiStatus;
@@ -57,22 +56,9 @@ public final class NpcManagerImpl implements NpcManager {
     private final Map<Integer, UUID> entityIdIndex = new ConcurrentHashMap<>();
 
     /**
-     * NMS 适配器引用。
-     *
-     * <p>构造时注入，用于在插件启动阶段提前验证 NMS 就绪（若当前服务端版本不支持，
-     * {@code NmsAdapterFactory.createAdapter} 会抛异常，导致 NpcManagerImpl 构造失败，
-     * 插件 onEnable 中止）。NpcController 内部也会自行获取 adapter 实例（无状态，多实例安全）。
-     * 本字段保留供未来批量操作或健康检查使用。</p>
-     */
-    private final NmsAdapter adapter;
-
-    /**
      * 创建 NpcManager 实例。
-     *
-     * @param adapter NMS 适配器，不可为 null（由 {@code NmsAdapterFactory.createAdapter} 获取）
      */
-    public NpcManagerImpl(NmsAdapter adapter) {
-        this.adapter = Objects.requireNonNull(adapter, "adapter cannot be null");
+    public NpcManagerImpl() {
     }
 
     @Override
@@ -123,7 +109,8 @@ public final class NpcManagerImpl implements NpcManager {
         entityIdIndex.put(npc.getEntityId(), npc.getId());
         // 注册成功，触发 NpcCreateEvent（不可取消，监听器可通过 manager 查询到 NPC）
         Bukkit.getPluginManager().callEvent(new NpcCreateEvent(npc));
-        // spawn（Task 5 阶段 targetViewers 为空，spawn 为空操作；Task 7 Tracker 接入后生效）
+        // spawn：对 targetViewers 中所有玩家发送 spawn 包
+        // （VisibilityTracker 在玩家进入可见距离时调用 showTo 维护 targetViewers）
         npc.spawn();
         return npc;
     }

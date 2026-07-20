@@ -78,7 +78,7 @@ public interface NpcManager {
      * @return 新创建的 NPC
      * @throws NullPointerException     当 data 为 null
      * @throws IllegalStateException    当 name 已存在
-     * @throws com.oolongho.woonpc.nms.util.WooNPCsException 当 NmsAdapter 未就绪（Task 4 未完成）
+     * @throws com.oolongho.woonpc.nms.util.WooNPCsException 当 NmsAdapter 未就绪
      */
     Npc create(NpcData data);
 

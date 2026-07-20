@@ -45,7 +45,13 @@ public final class CommandSafety {
     }
 
     /**
-     * 校验坐标字符串合法性（必须为可解析数字）。
+     * 校验坐标字符串合法性（必须为可解析数字，或 {@code ~} 相对坐标）。
+     *
+     * <p>支持两种格式：</p>
+     * <ul>
+     *   <li>绝对坐标：{@code "1.5"}、{@code "-2"}</li>
+     *   <li>相对坐标：{@code "~"}（=base+0）、{@code "~5"}（=base+5）、{@code "~-2.5"}</li>
+     * </ul>
      *
      * @param coord 坐标字符串
      * @return 合法返回 true
@@ -54,11 +60,31 @@ public final class CommandSafety {
         if (coord == null || coord.isBlank()) {
             return false;
         }
+        String s = coord.startsWith("~") ? coord.substring(1) : coord;
+        if (s.isEmpty()) {
+            return true;  // 单独 "~" 表示 base+0
+        }
         try {
-            Double.parseDouble(coord);
+            Double.parseDouble(s);
             return true;
         } catch (NumberFormatException e) {
             return false;
         }
+    }
+
+    /**
+     * 解析坐标字符串为数值，支持 {@code ~} 相对坐标偏移。
+     *
+     * @param coord 坐标字符串（已通过 {@link #validateCoordinate} 校验）
+     * @param base  基准值（绝对坐标时被忽略；相对坐标时为 {@code base + offset}）
+     * @return 解析后的坐标值
+     */
+    public static double parseCoordinate(String coord, double base) {
+        if (coord.startsWith("~")) {
+            String s = coord.substring(1);
+            double offset = s.isEmpty() ? 0.0 : Double.parseDouble(s);
+            return base + offset;
+        }
+        return Double.parseDouble(coord);
     }
 }

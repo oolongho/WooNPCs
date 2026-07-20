@@ -17,7 +17,7 @@ import org.jetbrains.annotations.NotNull;
  * <h2>触发时机</h2>
  * <p>{@code NpcImpl.interact(player, clickType)} → 构造本事件 →
  * {@code Bukkit.getPluginManager().callEvent(event)} →（未取消）
- * Task 18 的监听器调用 {@code ActionManager.execute(player, npc, clickType)}。</p>
+ * 由 {@code ActionManager} 监听本事件并调用 {@code ActionManager.execute(player, npc, clickType)}。</p>
  *
  * <h2>事件优先级</h2>
  * <p>外部插件可使用任意优先级（{@code LOWEST} - {@code HIGHEST}）监听本事件，

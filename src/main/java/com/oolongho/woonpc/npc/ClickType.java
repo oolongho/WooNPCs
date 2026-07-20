@@ -9,7 +9,7 @@ import java.util.Objects;
  * 触发对应的动作集合（{@code ActionManager}）。</p>
  *
  * <p>与 Bukkit {@code org.bukkit.event.block.Action} 的差异：本枚举仅区分三类点击，
- * 不细分左/右键点击空气或方块，由上层 {@code PacketListener}（Task 7）将
+ * 不细分左/右键点击空气或方块，由 {@code NpcInteractListener} 将
  * Bukkit 原始 Action 归约为本枚举。</p>
  *
  * @author oolongho

@@ -27,7 +27,7 @@ import java.util.function.Function;
  * NPC 抽象基类（公共 API）。
  *
  * <p>定义一个数据包 NPC 的生命周期契约与状态访问接口。持有 {@link NpcData}（数据快照）
- * 与 {@link NpcController}（包发送委托），具体生命周期实现由子类（{@code NpcImpl}，Task 5）
+ * 与 {@link NpcController}（包发送委托），具体生命周期实现由子类 {@code NpcImpl}
  * 结合 {@code Tracker}、{@code ActionManager} 等组件完成。</p>
  *
  * <h2>架构关系</h2>
@@ -42,11 +42,11 @@ import java.util.function.Function;
  * <ul>
  *   <li>{@link #spawn()}：对当前可见玩家发送 spawn 包（首次生成或重新显示）</li>
  *   <li>{@link #despawn()}：对所有可见玩家发送 despawn 包（不移除 NPC，可再次 spawn）</li>
- *   <li>{@link #remove()}：despawn + 从 NpcManager 注销（Task 5 实现）</li>
+ *   <li>{@link #remove()}：despawn + 从 NpcManager 注销</li>
  *   <li>{@link #update()}：增量同步 dirty 字段到可见玩家（NpcController 按 dirty 决定发包）</li>
- *   <li>{@link #moveTo(Location)}：移动到新位置（Phase 1 瞬移，Phase 2 平滑路径）</li>
+ *   <li>{@link #moveTo(Location)}：移动到新位置（瞬移）</li>
  *   <li>{@link #lookAt(Location)}：头部朝向目标位置</li>
- *   <li>{@link #interact(Player, ClickType)}：触发交互事件 + 执行动作集合（Task 9 实现）</li>
+ *   <li>{@link #interact(Player, ClickType)}：触发交互事件 + 执行动作集合</li>
  * </ul>
  *
  * <h2>线程安全</h2>
@@ -132,6 +132,18 @@ public abstract class Npc {
     public abstract int getEntityId();
 
     /**
+     * 获取当前对该 NPC 可见的玩家数量。
+     *
+     * <p>由 {@code NpcController} 维护的可见集合大小，反映已发送 spawn 包且
+     * 未发送 despawn 包的玩家数。供 GUI / 调试 / 统计场景使用。</p>
+     *
+     * @return 可见玩家数量
+     */
+    public int getVisiblePlayerCount() {
+        return controller.getVisiblePlayers().size();
+    }
+
+    /**
      * 获取包发送控制器（内部使用）。
      *
      * <p>子类通过此方法访问 {@link NpcController} 发送数据包。
@@ -150,10 +162,9 @@ public abstract class Npc {
      * 生成 NPC：对当前可见玩家发送 spawn 包。
      *
      * <p>首次生成或 {@link #despawn()} 后重新显示时调用。
-     * 实现应通过 {@code Tracker}（Task 6）确定可见玩家集合，
-     * 委托 {@link NpcController#spawn} 发包。</p>
+     * 实现通过 {@code Tracker} 确定可见玩家集合，委托 {@link NpcController#spawn} 发包。</p>
      *
-     * @throws com.oolongho.woonpc.nms.util.WooNPCsException 当 NmsAdapter 未就绪（Task 4 未完成）
+     * @throws com.oolongho.woonpc.nms.util.WooNPCsException 当 NmsAdapter 未就绪
      */
     public abstract void spawn();
 
@@ -169,7 +180,7 @@ public abstract class Npc {
      * 移除 NPC：despawn + 从 NpcManager 注销。
      *
      * <p>调用后此 NPC 实例不再可用，不应再次调用生命周期方法。
-     * Task 5 由 {@code NpcManager.removeNpc} 实现具体注销逻辑。</p>
+     * 具体注销逻辑由 {@code NpcManager.remove} 实现。</p>
      */
     public abstract void remove();
 
@@ -185,8 +196,7 @@ public abstract class Npc {
     /**
      * 移动 NPC 到新位置。
      *
-     * <p><b>Phase 1</b>：瞬移（直接发送 {@code TeleportEntityPacket}）。
-     * <b>Phase 2</b>：平滑路径跟随（{@code followPath}，预留接口）。</p>
+     * <p>当前实现为瞬移（直接发送 {@code TeleportEntityPacket}）。</p>
      *
      * <p>实现应同时更新 {@link #data} 的 location 字段（通过 {@link NpcData#withLocation}），
      * 并触发 {@link NpcController#moveTo} 发包。</p>
@@ -209,8 +219,8 @@ public abstract class Npc {
     /**
      * 处理玩家交互。
      *
-     * <p>触发 {@code NpcInteractEvent}（Task 12），未取消时执行该 ClickType 对应的
-     * 动作集合（Task 9 {@code ActionManager}）。同时检查 {@link NpcData#interactionCooldown}
+     * <p>触发 {@code NpcInteractEvent}，未取消时执行该 ClickType 对应的
+     * 动作集合（{@code ActionManager}）。同时检查 {@link NpcData#interactionCooldown}
      * 防止短时间重复触发。</p>
      *
      * @param player    交互的玩家

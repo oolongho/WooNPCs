@@ -4,6 +4,9 @@ import com.oolongho.woonpc.api.actions.ActionContext;
 import com.oolongho.woonpc.api.actions.NpcAction;
 import org.jetbrains.annotations.ApiStatus;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 /**
  * 等待指定 tick 的动作。
  *
@@ -48,6 +51,13 @@ public final class WaitAction extends NpcAction {
     @Override
     public String typeId() {
         return "wait";
+    }
+
+    @Override
+    public Map<String, String> serialize() {
+        Map<String, String> map = new LinkedHashMap<>();
+        map.put("ticks", Integer.toString(delayTicks));
+        return map;
     }
 
     @Override

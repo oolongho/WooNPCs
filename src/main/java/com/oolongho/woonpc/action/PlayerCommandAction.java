@@ -5,6 +5,8 @@ import com.oolongho.woonpc.api.actions.NpcAction;
 import org.bukkit.Bukkit;
 import org.jetbrains.annotations.ApiStatus;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -46,6 +48,13 @@ public final class PlayerCommandAction extends NpcAction {
     @Override
     public String typeId() {
         return "player_command";
+    }
+
+    @Override
+    public Map<String, String> serialize() {
+        Map<String, String> map = new LinkedHashMap<>();
+        map.put("command", command);
+        return map;
     }
 
     @Override

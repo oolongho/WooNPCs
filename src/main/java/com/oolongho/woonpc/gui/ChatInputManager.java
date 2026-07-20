@@ -1,14 +1,13 @@
 package com.oolongho.woonpc.gui;
 
 import com.oolongho.woonpc.WooNPCs;
+import com.oolongho.woonpc.util.Scheduler;
 import net.kyori.adventure.text.minimessage.MiniMessage;
-import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.AsyncPlayerChatEvent;
-import org.bukkit.scheduler.BukkitTask;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -22,7 +21,7 @@ import java.util.function.Consumer;
 /**
  * 聊天输入管理器：通过聊天框接收玩家文本输入，支持超时取消与校验。
  *
- * <p>由 Task 10 在 {@link WooNPCs} 主类装配时注册为 Listener。</p>
+ * <p>由 {@link WooNPCs} 主类在 onEnable 阶段注册为 Listener。</p>
  *
  * <h2>工作流程</h2>
  * <ol>
@@ -36,12 +35,13 @@ import java.util.function.Consumer;
  *
  * <h2>线程安全</h2>
  * <p>{@link #pendingInputs} 与 {@link #timeoutTasks} 使用 {@link ConcurrentHashMap}。
- * 聊天事件在异步线程触发，callback 通过 {@link Bukkit#getScheduler()} 切回主线程执行，
+ * 聊天事件在异步线程触发，callback 通过 {@link Scheduler#runSync} 切回主线程执行，
  * 确保 callback 中的 Bukkit API 调用线程安全。</p>
  *
  * <h2>校验</h2>
- * <p>Task 1 仅实现非空校验。具体 InputType 的校验逻辑（如名称长度、坐标格式、
- * 权限节点格式等）将在 Task 3+ 各 GUI 实现时细化。</p>
+ * <p>每个 {@link InputType} 关联独立的 {@code Validator} 函数式接口，
+ * 覆盖名称长度、坐标格式、权限节点格式等场景。校验在异步聊天事件中执行，
+ * 不通过则提示重新输入并重置超时。</p>
  *
  * @author oolongho
  */
@@ -54,16 +54,19 @@ public final class ChatInputManager implements Listener {
     private static final MiniMessage MM = MiniMessage.miniMessage();
 
     private final WooNPCs plugin;
+    private final Scheduler scheduler;
     private final Map<UUID, InputContext> pendingInputs = new ConcurrentHashMap<>();
-    private final Map<UUID, BukkitTask> timeoutTasks = new ConcurrentHashMap<>();
+    private final Map<UUID, Scheduler.TaskHandle> timeoutTasks = new ConcurrentHashMap<>();
 
     /**
      * 构造聊天输入管理器。
      *
-     * @param plugin 插件实例，用于调度超时任务与主线程回调
+     * @param plugin    插件实例，用于日志与生命周期标识
+     * @param scheduler 调度器，用于超时任务与主线程回调
      */
-    public ChatInputManager(@NotNull WooNPCs plugin) {
+    public ChatInputManager(@NotNull WooNPCs plugin, @NotNull Scheduler scheduler) {
         this.plugin = Objects.requireNonNull(plugin, "plugin cannot be null");
+        this.scheduler = Objects.requireNonNull(scheduler, "scheduler cannot be null");
     }
 
     /**
@@ -73,7 +76,7 @@ public final class ChatInputManager implements Listener {
      *
      * @param player   目标玩家
      * @param prompt   提示消息（MiniMessage 格式）
-     * @param type     输入类型（用于后续校验，Task 3+ 细化）
+     * @param type     输入类型（关联 {@code Validator} 校验逻辑）
      * @param callback 输入完成回调（在主线程执行，接收玩家输入文本）
      */
     public void requestInput(@NotNull Player player, @NotNull String prompt,
@@ -160,20 +163,25 @@ public final class ChatInputManager implements Listener {
             return;
         }
 
-        // TODO Task 3+: 根据 InputType 实现具体校验逻辑（名称长度/坐标格式/权限格式等）
-        // 目前所有 InputType 仅做非空校验
+        // 按 InputType 调用对应校验器：返回 null=通过，非 null=错误提示
         String trimmed = message.trim();
         if (trimmed.isEmpty()) {
             player.sendMessage(MM.deserialize("<red>输入不能为空，请重新输入。"));
-            // 校验失败：重置超时，保持 pendingInputs 等待重新输入
+            scheduleTimeout(player);
+            return;
+        }
+        String error = ctx.inputType().validate(trimmed);
+        if (error != null) {
+            player.sendMessage(MM.deserialize("<red>" + error + "，请重新输入。"));
             scheduleTimeout(player);
             return;
         }
 
-        // 输入有效：清理 + 切回主线程执行 callback
+        // 输入有效：清理 + 切回玩家所在 region 执行 callback
+        // Folia 上 callback 内可能调用玩家 API（openGui、sendMessage、setSkin 等），需在玩家 region
         clearPending(id);
         final String input = trimmed;
-        Bukkit.getScheduler().runTask(plugin, () -> ctx.callback().accept(input));
+        scheduler.runAtEntity(player, () -> ctx.callback().accept(input));
     }
 
     // ==================== 内部方法 ====================
@@ -184,7 +192,7 @@ public final class ChatInputManager implements Listener {
      * @param id 玩家 UUID
      */
     private void clearPending(@NotNull UUID id) {
-        BukkitTask task = timeoutTasks.remove(id);
+        Scheduler.TaskHandle task = timeoutTasks.remove(id);
         if (task != null) {
             task.cancel();
         }
@@ -199,11 +207,11 @@ public final class ChatInputManager implements Listener {
     private void scheduleTimeout(@NotNull Player player) {
         UUID id = player.getUniqueId();
         // 取消旧的超时任务
-        BukkitTask oldTask = timeoutTasks.remove(id);
+        Scheduler.TaskHandle oldTask = timeoutTasks.remove(id);
         if (oldTask != null) {
             oldTask.cancel();
         }
-        BukkitTask task = Bukkit.getScheduler().runTaskLater(plugin, () -> {
+        Scheduler.TaskHandle task = scheduler.runAtEntityLater(player, () -> {
             InputContext ctx = pendingInputs.remove(id);
             timeoutTasks.remove(id);
             if (ctx != null) {
@@ -231,30 +239,132 @@ public final class ChatInputManager implements Listener {
     }
 
     /**
-     * 输入类型枚举：标识当前输入的语义，用于 Task 3+ 实现类型相关的校验逻辑。
+     * 输入类型枚举：标识当前输入的语义，{@link #validate} 按类型校验输入合法性。
+     *
+     * <p>校验返回 {@code null} 表示通过；返回非 null 字符串表示错误提示（发送给玩家）。</p>
      */
     public enum InputType {
-        /** 通用文本输入 */
-        GENERIC,
-        /** NPC 名称（创建时） */
-        NPC_NAME,
-        /** NPC 显示名 */
-        DISPLAY_NAME,
-        /** 皮肤纹理值 */
-        SKIN_TEXTURE,
-        /** 皮肤签名值 */
-        SKIN_SIGNATURE,
-        /** 玩家名（用于获取皮肤） */
-        PLAYER_NAME,
-        /** 权限节点 */
-        PERMISSION,
-        /** 动作参数值 */
-        ACTION_VALUE,
-        /** 动作命令内容 */
-        ACTION_COMMAND,
-        /** 音效名称 */
-        SOUND_NAME,
-        /** 坐标输入 */
-        COORDINATES
+        /** 通用文本输入（仅非空校验） */
+        GENERIC(s -> null),
+        /** NPC 名称：1-32 字符，字母/数字/下划线/中文 */
+        NPC_NAME(s -> {
+            if (s.length() < 1 || s.length() > 32) {
+                return "名称长度必须在 1-32 之间";
+            }
+            if (!s.matches("[a-zA-Z0-9_\\u4e00-\\u9fa5]+")) {
+                return "名称只能包含字母、数字、下划线、中文";
+            }
+            return null;
+        }),
+        /** NPC 显示名：1-64 字符（MiniMessage 标签占用字符，故放宽） */
+        DISPLAY_NAME(s -> {
+            if (s.isEmpty() || s.length() > 64) {
+                return "显示名长度必须在 1-64 之间";
+            }
+            return null;
+        }),
+        /** 皮肤纹理值：base64，长度 1-512 */
+        SKIN_TEXTURE(s -> {
+            if (s.isEmpty() || s.length() > 512) {
+                return "皮肤 texture 长度无效（1-512）";
+            }
+            if (!s.matches("[A-Za-z0-9+/=]+")) {
+                return "皮肤 texture 必须为 base64 字符";
+            }
+            return null;
+        }),
+        /** 皮肤签名值：base64，长度 0-1024（可空表示无签名） */
+        SKIN_SIGNATURE(s -> {
+            if (s.length() > 1024) {
+                return "皮肤 signature 长度超出限制（最长 1024）";
+            }
+            if (!s.isEmpty() && !s.matches("[A-Za-z0-9+/=]+")) {
+                return "皮肤 signature 必须为 base64 字符";
+            }
+            return null;
+        }),
+        /** 玩家名：3-16 字符，字母/数字/下划线 */
+        PLAYER_NAME(s -> {
+            if (s.length() < 3 || s.length() > 16) {
+                return "玩家名长度必须在 3-16 之间";
+            }
+            if (!s.matches("[a-zA-Z0-9_]+")) {
+                return "玩家名只能包含字母、数字、下划线";
+            }
+            return null;
+        }),
+        /** 权限节点：1-64 字符，字母/数字/点/下划线 */
+        PERMISSION(s -> {
+            if (s.isEmpty() || s.length() > 64) {
+                return "权限节点长度必须在 1-64 之间";
+            }
+            if (!s.matches("[a-zA-Z0-9_.]+")) {
+                return "权限节点只能包含字母、数字、点、下划线";
+            }
+            return null;
+        }),
+        /** 动作参数值：1-256 字符 */
+        ACTION_VALUE(s -> {
+            if (s.isEmpty() || s.length() > 256) {
+                return "动作参数长度必须在 1-256 之间";
+            }
+            return null;
+        }),
+        /** 动作命令内容：1-256 字符（不含前导 "/"） */
+        ACTION_COMMAND(s -> {
+            String cmd = s.startsWith("/") ? s.substring(1) : s;
+            if (cmd.isEmpty() || cmd.length() > 256) {
+                return "命令长度必须在 1-256 之间";
+            }
+            return null;
+        }),
+        /** 音效名称：1-64 字符，字母/数字/点/下划线 */
+        SOUND_NAME(s -> {
+            if (s.isEmpty() || s.length() > 64) {
+                return "音效名称长度必须在 1-64 之间";
+            }
+            if (!s.matches("[a-zA-Z0-9_.]+")) {
+                return "音效名称只能包含字母、数字、点、下划线";
+            }
+            return null;
+        }),
+        /** 坐标：支持 "x y z" / "x,y,z" / "x y z yaw pitch" 格式 */
+        COORDINATES(s -> {
+            String normalized = s.replace(",", " ").trim();
+            String[] parts = normalized.split("\\s+");
+            if (parts.length < 3 || parts.length > 5) {
+                return "坐标格式无效，需为 x y z 或 x y z yaw pitch";
+            }
+            for (String p : parts) {
+                try {
+                    Double.parseDouble(p);
+                } catch (NumberFormatException e) {
+                    return "坐标值无效: " + p;
+                }
+            }
+            return null;
+        });
+
+        private final Validator validator;
+
+        InputType(Validator validator) {
+            this.validator = validator;
+        }
+
+        /**
+         * 校验输入文本。
+         *
+         * @param input 玩家输入（已 trim）
+         * @return null 表示通过，非 null 字符串表示错误提示
+         */
+        public String validate(String input) {
+            return validator.validate(input);
+        }
+
+        /** 校验器函数式接口：返回 null=通过，非 null=错误提示。 */
+        @FunctionalInterface
+        public interface Validator {
+            String validate(String input);
+        }
     }
 }

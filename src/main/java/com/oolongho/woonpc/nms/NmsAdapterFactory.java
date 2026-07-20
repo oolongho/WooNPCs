@@ -12,17 +12,16 @@ import java.util.List;
  * NMS 适配器工厂。
  *
  * <p>按 {@link MinecraftVersion} 选择对应的 {@link NmsAdapter} 实现。
- * 采用 <b>策略 B：Class.forName 延迟加载</b> —— 工厂引用实现类全限定名，
- * Task 4 创建实现类（{@code Nms_1_21} / {@code Nms_1_21_5} / {@code Nms_1_21_11}）后
- * 无需修改工厂即可自动生效。</p>
+ * 采用 <b>策略 B：Class.forName 延迟加载</b> —— 工厂引用实现类全限定名
+ * （{@code Nms_1_21} / {@code Nms_1_21_5} / {@code Nms_1_21_11}），
+ * 新增版本只需新增实现类即可，无需修改工厂。</p>
  *
  * <h2>版本映射</h2>
  * <ul>
- *   <li>1.21.0-1.21.1 → <b>不支持</b>（与 fancynpcs-v2 决策一致，NMS API 差异过大）</li>
- *   <li>1.21.2-1.21.4 → {@code Nms_1_21}</li>
+ *   <li>1.21.0-1.21.4 → {@code Nms_1_21}（PacketFactory 内置版本自适应：
+ *       1.21.0-1.21.1 走 STREAM_CODEC.decode 路径，1.21.2+ 走 PositionMoveRotation 4 参构造器）</li>
  *   <li>1.21.5-1.21.8 → {@code Nms_1_21_5}</li>
- *   <li>1.21.9-1.21.10 → {@code Nms_1_21_11}（候选回退 {@code Nms_1_21_5}）</li>
- *   <li>1.21.11+ → {@code Nms_1_21_11}（候选回退 {@code Nms_1_21_5}）</li>
+ *   <li>1.21.9-1.21.11+ → {@code Nms_1_21_11}（候选回退 {@code Nms_1_21_5}）</li>
  *   <li>1.22+ → {@code Nms_1_21_11}（候选回退 {@code Nms_1_21_5}，假设协议未变）</li>
  *   <li>26.x+ → {@code Nms_1_21_11}（候选回退 {@code Nms_1_21_5}）</li>
  * </ul>
@@ -32,6 +31,14 @@ import java.util.List;
  * 第一个成功加载的实现类即被实例化。1.21.9+ 区间保留 {@code Nms_1_21_5} 作为
  * 回退候选，确保即使 {@code Nms_1_21_11} 因运行时类不存在（如 1.21.9 早期 authlib
  * PropertyMap 构造器签名差异）也能继续工作。</p>
+ *
+ * <p>回退触发条件包括两类：</p>
+ * <ul>
+ *   <li>{@link ClassNotFoundException}：实现类或其依赖类不存在</li>
+ *   <li>{@link LinkageError}：实现类静态初始化失败（{@code ExceptionInInitializerError}）
+ *       或类定义链接失败（{@code NoClassDefFoundError}）。此类错误的典型场景是
+ *       适配器静态字段初始化时通过反射加载了目标版本不存在的 NMS 类成员</li>
+ * </ul>
  *
  * @author oolongho
  */
@@ -50,7 +57,7 @@ public final class NmsAdapterFactory {
      *
      * @param version Minecraft 服务端版本
      * @return 适配器实例
-     * @throws WooNPCsException 如果该版本不支持或实现类缺失
+     * @throws WooNPCsException 如果该版本不支持或所有候选实现类均加载/实例化失败
      */
     public static NmsAdapter createAdapter(MinecraftVersion version) {
         List<String> candidates = resolveImplCandidates(version);
@@ -59,7 +66,7 @@ public final class NmsAdapterFactory {
                     + " (no adapter mapping defined)");
         }
 
-        Exception lastError = null;
+        Throwable lastError = null;
         for (int i = 0; i < candidates.size(); i++) {
             String className = candidates.get(i);
             try {
@@ -69,12 +76,19 @@ public final class NmsAdapterFactory {
                 NmsAdapter adapter = (NmsAdapter) ctor.newInstance();
                 if (i > 0) {
                     Bukkit.getLogger().warning("[WooNPCs] NMS adapter " + candidates.get(0)
-                            + " not found, using fallback: " + className);
+                            + " failed to load, using fallback: " + className);
                 }
                 return adapter;
             } catch (ClassNotFoundException e) {
                 // 实现类尚未创建，记录后继续尝试下一个候选
                 lastError = e;
+            } catch (LinkageError e) {
+                // 实现类静态初始化失败（ExceptionInInitializerError）或类定义链接失败
+                // （NoClassDefFoundError），通常是适配器反射加载了目标版本不存在的成员
+                lastError = e;
+                Bukkit.getLogger().warning("[WooNPCs] NMS adapter " + className
+                        + " failed to initialize (" + e.getClass().getSimpleName()
+                        + ": " + e.getMessage() + ")");
             } catch (ReflectiveOperationException e) {
                 throw new WooNPCsException("Failed to instantiate NMS adapter " + className
                         + " (constructor error)", e);
@@ -89,7 +103,8 @@ public final class NmsAdapterFactory {
     /**
      * 按版本解析候选实现类全限定名列表（有序，前者优先）。
      *
-     * <p>1.21.x 系列按 patch 切分：0-1 不支持、2-4 用 {@code Nms_1_21}、
+     * <p>1.21.x 系列按 patch 切分：0-4 用 {@code Nms_1_21}（1.21.0-1.21.1 由
+     * PacketFactory 内部 PositionMoveRotation 容错+STREAM_CODEC.decode 自适应）、
      * 5-8 用 {@code Nms_1_21_5}、9+ 用 {@code Nms_1_21_11}（带回退候选）。
      * 1.22+ 与 26.x+ 视为与 1.21.11+ 协议兼容，使用同一适配器。</p>
      *
@@ -103,12 +118,11 @@ public final class NmsAdapterFactory {
 
         // 旧格式 1.21.x 系列：按 patch 切分
         if (major == 1 && minor == 21) {
-            if (patch <= 1) {
-                // 1.21.0-1.21.1：不支持（NMS API 差异过大）
-                return List.of();
-            }
             if (patch <= 4) {
-                // 1.21.2-1.21.4：使用 Nms_1_21
+                // 1.21.0-1.21.4：使用 Nms_1_21
+                // 1.21.0-1.21.1 的 NMS 差异（PositionMoveRotation 不存在、
+                // AddEntityPacket 第 11 参为 double、PlayerInfoEntry 7 参构造器、
+                // TeleportPacket 无 4 参构造器）由 PacketFactory 内置版本自适应处理
                 return List.of(IMPL_PACKAGE + "Nms_1_21");
             }
             if (patch <= 8) {

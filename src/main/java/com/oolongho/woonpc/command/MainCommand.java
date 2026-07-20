@@ -20,6 +20,7 @@ import com.oolongho.woonpc.api.actions.NpcAction;
 import com.oolongho.woonpc.command.arguments.EnumValueArgument;
 import com.oolongho.woonpc.command.arguments.NpcNameArgument;
 import com.oolongho.woonpc.command.arguments.SkinSourceArgument;
+import com.oolongho.woonpc.config.MessageManager;
 import com.oolongho.woonpc.gui.ChatInputManager;
 import com.oolongho.woonpc.gui.GuiManager;
 import com.oolongho.woonpc.gui.NpcListGui;
@@ -30,8 +31,8 @@ import com.oolongho.woonpc.npc.NpcPose;
 import com.oolongho.woonpc.skin.SkinData;
 import com.oolongho.woonpc.storage.NpcStorage;
 import com.oolongho.woonpc.util.CommandSafety;
+import com.oolongho.woonpc.util.Scheduler;
 import net.kyori.adventure.text.minimessage.MiniMessage;
-import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.command.Command;
@@ -85,7 +86,7 @@ import java.util.logging.Level;
  * </ul>
  *
  * <h2>装配契约</h2>
- * <p>由 Task 18 主类装配，构造参数：</p>
+ * <p>由主类 {@link com.oolongho.woonpc.WooNPCs} 在 onEnable 阶段装配，构造参数：</p>
  * <pre>{@code
  * MainCommand cmd = new MainCommand(plugin, npcManager, storage, actionManager, skinManager);
  * plugin.getCommand("woonpc").setExecutor(cmd);
@@ -98,7 +99,6 @@ import java.util.logging.Level;
 public final class MainCommand implements CommandExecutor, TabCompleter {
 
     private static final MiniMessage MM = MiniMessage.miniMessage();
-    private static final String PREFIX = "<dark_gray>[<aqua>WooNPCs<dark_gray>] <reset>";
     private static final String PERM = "woonpc.admin";
 
     private final WooNPCs plugin;
@@ -108,6 +108,8 @@ public final class MainCommand implements CommandExecutor, TabCompleter {
     private final SkinManager skinManager;
     private final GuiManager guiManager;
     private final ChatInputManager chatInputManager;
+    private final Scheduler scheduler;
+    private final MessageManager messageManager;
 
     /** 子命令注册表（保持注册顺序，便于 help/补全展示） */
     private final Map<String, SubCommand> subCommands = new LinkedHashMap<>();
@@ -124,6 +126,8 @@ public final class MainCommand implements CommandExecutor, TabCompleter {
      * @param skinManager   皮肤管理器（skin 子命令异步获取使用）
      * @param guiManager    GUI 管理器（gui 子命令使用）
      * @param chatInputManager 聊天输入管理器（GUI 文本输入使用）
+     * @param scheduler     调度器（异步皮肤回调切回主线程使用）
+     * @param messageManager 消息管理器（前缀与本地化使用）
      */
     public MainCommand(@NotNull WooNPCs plugin,
                        @NotNull NpcManager npcManager,
@@ -131,7 +135,9 @@ public final class MainCommand implements CommandExecutor, TabCompleter {
                        @NotNull ActionManager actionManager,
                        @NotNull SkinManager skinManager,
                        @NotNull GuiManager guiManager,
-                       @NotNull ChatInputManager chatInputManager) {
+                       @NotNull ChatInputManager chatInputManager,
+                       @NotNull Scheduler scheduler,
+                       @NotNull MessageManager messageManager) {
         this.plugin = Objects.requireNonNull(plugin, "plugin cannot be null");
         this.npcManager = Objects.requireNonNull(npcManager, "npcManager cannot be null");
         this.storage = Objects.requireNonNull(storage, "storage cannot be null");
@@ -139,6 +145,8 @@ public final class MainCommand implements CommandExecutor, TabCompleter {
         this.skinManager = Objects.requireNonNull(skinManager, "skinManager cannot be null");
         this.guiManager = Objects.requireNonNull(guiManager, "guiManager cannot be null");
         this.chatInputManager = Objects.requireNonNull(chatInputManager, "chatInputManager cannot be null");
+        this.scheduler = Objects.requireNonNull(scheduler, "scheduler cannot be null");
+        this.messageManager = Objects.requireNonNull(messageManager, "messageManager cannot be null");
         register("create", this::create);
         register("remove", this::remove);
         register("list", this::list);
@@ -414,10 +422,12 @@ public final class MainCommand implements CommandExecutor, TabCompleter {
         send(sender, "<green>NPC <yellow>" + npc.getName() + " <green>已移动到你的位置。");
     }
 
-    /** moveto <name> <x> <y> <z> [yaw] [pitch] — 移动到指定坐标 */
+    /** moveto <name> <x> <y> <z> [yaw] [pitch] — 移动到指定坐标（x/y/z 支持 ~ 相对坐标） */
     private void moveto(CommandSender sender, String[] args) {
         if (args.length < 4 || args.length > 6) {
             send(sender, "<gray>用法: /woonpc moveto <name> <x> <y> <z> [yaw] [pitch]");
+            send(sender, "<gray>提示: x/y/z 支持 ~ 相对坐标（如 <aqua>~ ~2 ~<gray>）"
+                    + (sender instanceof Player ? "" : "，相对坐标基于 NPC 当前位置"));
             return;
         }
         Optional<Npc> opt = NpcNameArgument.parse(npcManager, args[0]);
@@ -428,7 +438,7 @@ public final class MainCommand implements CommandExecutor, TabCompleter {
         if (!CommandSafety.validateCoordinate(args[1])
                 || !CommandSafety.validateCoordinate(args[2])
                 || !CommandSafety.validateCoordinate(args[3])) {
-            send(sender, "<red>坐标格式错误。");
+            send(sender, "<red>坐标格式错误: <yellow>" + args[1] + ", " + args[2] + ", " + args[3]);
             return;
         }
         Npc npc = opt.get();
@@ -437,24 +447,34 @@ public final class MainCommand implements CommandExecutor, TabCompleter {
             send(sender, "<red>NPC 所在世界未加载。");
             return;
         }
-        double x = Double.parseDouble(args[1]);
-        double y = Double.parseDouble(args[2]);
-        double z = Double.parseDouble(args[3]);
+        // 相对坐标基准：Player sender 用玩家位置，其余用 NPC 当前位置
+        double baseX = current.getX();
+        double baseY = current.getY();
+        double baseZ = current.getZ();
+        if (sender instanceof Player player) {
+            Location pl = player.getLocation();
+            baseX = pl.getX();
+            baseY = pl.getY();
+            baseZ = pl.getZ();
+        }
+        double x = CommandSafety.parseCoordinate(args[1], baseX);
+        double y = CommandSafety.parseCoordinate(args[2], baseY);
+        double z = CommandSafety.parseCoordinate(args[3], baseZ);
         float yaw = current.getYaw();
         float pitch = current.getPitch();
         if (args.length >= 5) {
             if (!CommandSafety.validateCoordinate(args[4])) {
-                send(sender, "<red>yaw 坐标格式错误: <yellow>" + args[4]);
+                send(sender, "<red>yaw 格式错误: <yellow>" + args[4]);
                 return;
             }
-            yaw = (float) Double.parseDouble(args[4]);
+            yaw = (float) CommandSafety.parseCoordinate(args[4], current.getYaw());
         }
         if (args.length >= 6) {
             if (!CommandSafety.validateCoordinate(args[5])) {
-                send(sender, "<red>pitch 坐标格式错误: <yellow>" + args[5]);
+                send(sender, "<red>pitch 格式错误: <yellow>" + args[5]);
                 return;
             }
-            pitch = (float) Double.parseDouble(args[5]);
+            pitch = (float) CommandSafety.parseCoordinate(args[5], current.getPitch());
         }
         Location loc = new Location(current.getWorld(), x, y, z, yaw, pitch);
         npc.setLocation(loc);
@@ -497,8 +517,9 @@ public final class MainCommand implements CommandExecutor, TabCompleter {
                 send(sender, "<gray>正在异步获取玩家 <yellow>" + playerName + " <gray>的皮肤...");
                 final UUID npcId = npc.getId();
                 skinManager.getSkin(playerName, skin -> {
-                    // 回调在异步线程，切回主线程更新 NPC
-                    Bukkit.getScheduler().runTask(plugin, () -> {
+                    // 回调在异步线程，切回玩家所在 region 更新 NPC（Folia 上 setSkin 涉及发包）
+                    // 控制台 sender 非 Entity，回退到 runSync（global region）
+                    Runnable action = () -> {
                         Optional<Npc> recheck = npcManager.getById(npcId);
                         if (recheck.isEmpty()) {
                             return;
@@ -507,7 +528,12 @@ public final class MainCommand implements CommandExecutor, TabCompleter {
                         target.setSkin(skin);
                         storage.save(target);
                         send(sender, "<green>NPC <yellow>" + target.getName() + " <green>皮肤已更新。");
-                    });
+                    };
+                    if (sender instanceof org.bukkit.entity.Player player) {
+                        scheduler.runAtEntity(player, action);
+                    } else {
+                        scheduler.runSync(action);
+                    }
                 });
             }
         }
@@ -526,7 +552,8 @@ public final class MainCommand implements CommandExecutor, TabCompleter {
         }
         Optional<NpcEquipmentSlot> slotOpt = EnumValueArgument.parse(NpcEquipmentSlot.class, args[1]);
         if (slotOpt.isEmpty()) {
-            send(sender, "<red>装备槽位无效: <yellow>" + args[1]);
+            send(sender, "<red>装备槽位无效: <yellow>" + args[1] + "<red>，可选: <aqua>"
+                    + EnumValueArgument.allowedValues(NpcEquipmentSlot.class));
             return;
         }
         final Material material;
@@ -574,7 +601,8 @@ public final class MainCommand implements CommandExecutor, TabCompleter {
         }
         Optional<GlowingColor> colorOpt = EnumValueArgument.parse(GlowingColor.class, args[1]);
         if (colorOpt.isEmpty()) {
-            send(sender, "<red>发光颜色无效: <yellow>" + args[1]);
+            send(sender, "<red>发光颜色无效: <yellow>" + args[1] + "<red>，可选: <aqua>"
+                    + EnumValueArgument.allowedValues(GlowingColor.class));
             return;
         }
         Npc npc = opt.get();
@@ -597,7 +625,8 @@ public final class MainCommand implements CommandExecutor, TabCompleter {
         }
         Optional<NpcPose> poseOpt = EnumValueArgument.parse(NpcPose.class, args[1]);
         if (poseOpt.isEmpty()) {
-            send(sender, "<red>姿势无效: <yellow>" + args[1]);
+            send(sender, "<red>姿势无效: <yellow>" + args[1] + "<red>，可选: <aqua>"
+                    + EnumValueArgument.allowedValues(NpcPose.class));
             return;
         }
         Npc npc = opt.get();
@@ -649,7 +678,6 @@ public final class MainCommand implements CommandExecutor, TabCompleter {
                 actionManager.setActions(npc.getId(), trigger, List.of());
                 send(sender, "<green>已清空 NPC <yellow>" + npc.getName()
                         + " <green>在 <aqua>" + trigger.name() + " <green>下的动作。");
-                send(sender, "<yellow>注意: <gray>动作配置仅内存有效，重启后丢失（持久化将在后续 Task 实现）");
             }
             case "add" -> {
                 if (args.length < 4) {
@@ -658,7 +686,8 @@ public final class MainCommand implements CommandExecutor, TabCompleter {
                 }
                 ActionTrigger trigger = parseTrigger(args[2]);
                 if (trigger == null) {
-                    send(sender, "<red>触发器无效: <yellow>" + args[2]);
+                    send(sender, "<red>触发器无效: <yellow>" + args[2]
+                            + " <gray>(left_click/right_click/any_click/custom)");
                     return;
                 }
                 String type = args[3].toLowerCase(Locale.ROOT);
@@ -677,7 +706,6 @@ public final class MainCommand implements CommandExecutor, TabCompleter {
                 actionManager.setActions(npc.getId(), trigger, existing);
                 send(sender, "<green>已为 NPC <yellow>" + npc.getName()
                         + " <green>添加动作 <aqua>" + type + " <green>到 <aqua>" + trigger.name());
-                send(sender, "<yellow>注意: <gray>动作配置仅内存有效，重启后丢失（持久化将在后续 Task 实现）");
             }
             default -> send(sender, "<red>未知操作: <yellow>" + op + " <gray>(add/remove/list)");
         }
@@ -781,11 +809,12 @@ public final class MainCommand implements CommandExecutor, TabCompleter {
         }
     }
 
-    /** reload — 重载配置 + 保存当前 NPC 数据 */
+    /** reload — 重载配置 + 重载 trackers / auto-save + 保存当前 NPC + actions 数据 */
     private void reload(CommandSender sender, String[] args) {
-        plugin.reloadConfig();
-        storage.saveAll();
-        send(sender, "<green>配置已重载，NPC 数据已保存。");
+        // 统一调用 plugin.reloadAll()：保存数据 → reloadConfig → messageManager → DebugManager
+        // → PlaceholderUtil → reloadTrackers → reloadAutoSave
+        plugin.reloadAll();
+        send(sender, "<green>配置已重载，NPC 与动作数据已保存。");
     }
 
     /** gui — 打开 GUI 列表（玩家专属） */
@@ -799,13 +828,14 @@ public final class MainCommand implements CommandExecutor, TabCompleter {
             return;
         }
         guiManager.openGui(player, new NpcListGui(plugin, npcManager, storage, actionManager,
-                skinManager, guiManager, chatInputManager, player));
+                skinManager, guiManager, chatInputManager, scheduler, player));
     }
 
     // ==================== 辅助方法 ====================
 
     private void send(CommandSender sender, String message) {
-        sender.sendMessage(MM.deserialize(PREFIX + message));
+        String prefix = messageManager.getRaw("prefix");
+        sender.sendMessage(MM.deserialize(prefix + message));
     }
 
     private List<String> filterPrefix(List<String> options, String prefix) {

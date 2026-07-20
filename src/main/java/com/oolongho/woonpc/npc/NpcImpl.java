@@ -25,7 +25,7 @@ import java.util.function.Function;
  *
  * <p>继承 {@link Npc} 抽象基类，实现 7 个生命周期方法。持有 {@link NpcManagerImpl} 引用
  * 用于 {@link #remove()} 时注销，以及 {@code targetViewers} 集合记录"应可见"的玩家
- * （由 Task 7 的 Tracker 维护，Task 5 阶段为空集）。</p>
+ * （由 {@code VisibilityTracker} 维护）。</p>
  *
  * <h2>线程安全</h2>
  * <ul>
@@ -45,7 +45,7 @@ import java.util.function.Function;
  *   <li>{@link #update()}：按 {@link NpcData#dirtyFields()} 增量同步，完成后 data = data.cleanCopy()</li>
  *   <li>{@link #moveTo(Location)}：data = data.withLocation(loc) + controller.moveTo</li>
  *   <li>{@link #lookAt(Location)}：计算 yaw/pitch + controller.updateHeadRotation</li>
- *   <li>{@link #interact(Player, ClickType)}：触发 {@link NpcInteractEvent}（ActionManager 由 Task 18 装配）</li>
+ *   <li>{@link #interact(Player, ClickType)}：触发 {@link NpcInteractEvent}，由 ActionManager 执行动作</li>
  * </ul>
  *
  * @author oolongho
@@ -59,12 +59,11 @@ public final class NpcImpl extends Npc {
     /**
      * 目标可见玩家集合（应看到此 NPC 的玩家 UUID）。
      *
-     * <p>由 Task 7 的 {@code VisibilityTracker} 维护：玩家进入可见范围 → {@link #showTo}；
+     * <p>由 {@code VisibilityTracker} 维护：玩家进入可见范围 → {@link #showTo}；
      * 玩家离开 → {@link #hideFrom}。{@link #spawn()} 遍历此集合发送 spawn 包。</p>
      *
-     * <p>Task 5 阶段此集合为空，spawn 为空操作。与 {@link NpcController#getVisiblePlayers()}
-     * 的区别：后者记录"已收到 spawn 包"的玩家（协议层状态），本字段记录"应收到 spawn 包"
-     * 的玩家（业务层决策）。</p>
+     * <p>与 {@link NpcController#getVisiblePlayers()} 的区别：后者记录"已收到 spawn 包"
+     * 的玩家（协议层状态），本字段记录"应收到 spawn 包"的玩家（业务层决策）。</p>
      */
     private final Set<UUID> targetViewers = ConcurrentHashMap.newKeySet();
 
@@ -189,11 +188,17 @@ public final class NpcImpl extends Npc {
             if (dirty.contains(NpcField.EQUIPMENT)) {
                 controller.updateEquipment(snapshot.equipment());
             }
-            // GLOW_COLOR / POSE / SCALE / EFFECTS / COLLIDABLE：合并为元数据包
-            // 注意：SHOW_IN_TAB 是 PlayerInfo 层属性（UPDATE_LISTED），非 entity metadata，
-            // 运行时切换需单独发包，暂未实现（TODO Task 7+）
+            // SHOW_IN_TAB：PlayerInfo(UPDATE_LISTED) 包（非 entity metadata，需单独发包）
+            if (dirty.contains(NpcField.SHOW_IN_TAB)) {
+                controller.updateTabListVisibility(snapshot.showInTab());
+            }
+            // SCALE：通过 UpdateAttributes 包发送（玩家实体无 scale metadata 索引）
+            if (dirty.contains(NpcField.SCALE)) {
+                controller.updateScale(snapshot.scale());
+            }
+            // GLOW_COLOR / POSE / EFFECTS / COLLIDABLE：合并为元数据包
             if (dirty.contains(NpcField.GLOW_COLOR) || dirty.contains(NpcField.POSE)
-                    || dirty.contains(NpcField.SCALE) || dirty.contains(NpcField.EFFECTS)
+                    || dirty.contains(NpcField.EFFECTS)
                     || dirty.contains(NpcField.COLLIDABLE)) {
                 controller.updateMetadata(snapshot);
             }
@@ -237,7 +242,7 @@ public final class NpcImpl extends Npc {
         Objects.requireNonNull(clickType, "clickType cannot be null");
         NpcInteractEvent event = new NpcInteractEvent(player, this, clickType);
         Bukkit.getPluginManager().callEvent(event);
-        // ActionManager 监听 NpcInteractEvent 并执行 actions（Task 18 装配后生效）
+        // ActionManager 监听 NpcInteractEvent（MONITOR 之外优先级）并执行 actions
     }
 
     // ==================== 字段修改（触发 NpcModifyEvent） ====================
@@ -317,7 +322,7 @@ public final class NpcImpl extends Npc {
         return controller.getEntityId();
     }
 
-    // ==================== Tracker 接入点（Task 7 使用） ====================
+    // ==================== Tracker 接入点 ====================
 
     /**
      * 让 NPC 对指定玩家可见（加入 targetViewers + 发送 spawn 包，不触发事件）。

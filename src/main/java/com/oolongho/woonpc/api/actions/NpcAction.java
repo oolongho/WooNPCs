@@ -1,10 +1,13 @@
 package com.oolongho.woonpc.api.actions;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 /**
  * NPC 动作抽象基类。
  *
  * <p>所有具体动作（{@code ConsoleCommandAction}、{@code MessageAction} 等）继承本类，
- * 实现 {@link #execute(ActionContext)} 与 {@link #typeId()}。</p>
+ * 实现 {@link #execute(ActionContext)}、{@link #typeId()} 与 {@link #serialize()}。</p>
  *
  * <h2>动作链执行模型</h2>
  * <p>{@link ActionManager} 按顺序遍历一个 trigger 下的动作列表，对每个动作：</p>
@@ -18,6 +21,11 @@ package com.oolongho.woonpc.api.actions;
  *     </ul>
  *   </li>
  * </ol>
+ *
+ * <h2>序列化</h2>
+ * <p>每个动作通过 {@link #serialize()} 输出 {@code Map<String, String>}（参数名 → 值），
+ * 与 {@link ActionManager#registerActionType} 注册的工厂互为逆运算。
+ * 序列化结构<b>不</b>包含 {@code type} 字段（type 由 typeId 单独存储）。</p>
  *
  * <h2>线程安全</h2>
  * <p>动作在主线程执行（Bukkit API 大多非线程安全）。{@link ActionManager#execute}
@@ -56,6 +64,18 @@ public abstract class NpcAction {
      * @return 类型 ID
      */
     public abstract String typeId();
+
+    /**
+     * 序列化本动作为参数 Map（不含 {@code type} 字段）。
+     *
+     * <p>与 {@link ActionManager#registerActionType} 工厂的输入互为逆运算。
+     * 默认返回空 Map（无参数动作返回空）。</p>
+     *
+     * @return 参数 Map，使用 {@link LinkedHashMap} 保证顺序稳定
+     */
+    public Map<String, String> serialize() {
+        return new LinkedHashMap<>();
+    }
 
     /**
      * 动作参数摘要（用于 GUI 显示与日志记录）。

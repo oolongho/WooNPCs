@@ -3,7 +3,6 @@ package com.oolongho.woonpc.api.actions;
 import com.oolongho.woonpc.api.Npc;
 import com.oolongho.woonpc.npc.ClickType;
 import org.bukkit.entity.Player;
-import org.jetbrains.annotations.ApiStatus;
 
 import java.util.List;
 import java.util.Map;
@@ -33,12 +32,11 @@ import java.util.function.Function;
  *   <li>遍历动作链执行，遇到 {@code delayTicks > 0} 用 scheduler 延迟剩余</li>
  * </ol>
  *
- * <p>本接口由 {@code ActionManagerImpl} 实现，由 Task 18 装配到 {@code NpcInteractEvent}
- * 监听器中。Task 8 阶段 ActionManager 不实现 Listener。</p>
+ * <p>本接口由 {@code ActionManagerImpl} 实现，由 {@code NpcInteractListener} 调用。
+ * 外部插件可通过 {@code WooNPCsAPI.getActionManager()} 获取实例并动态注册/查询动作。</p>
  *
  * @author oolongho
  */
-@ApiStatus.Internal
 public interface ActionManager {
 
     /**
@@ -95,4 +93,23 @@ public interface ActionManager {
      * @param factory 工厂函数：{@code Map<参数名, 参数值> -> NpcAction}
      */
     void registerActionType(String typeId, Function<Map<String, String>, NpcAction> factory);
+
+    /**
+     * 序列化所有 NPC 的动作为可持久化结构。
+     *
+     * <p>结构：{@code Map<npcIdStr, Map<triggerName, List<Map<参数名, 参数值>>>>}
+     * 每个 NpcAction 序列化为 {@link NpcAction#serialize()} 输出 + 一个 {@code "type"} 字段。</p>
+     *
+     * @return 可序列化的全量动作状态，空时返回空 Map
+     */
+    Map<String, Object> serializeAll();
+
+    /**
+     * 从 {@link #serializeAll} 的输出结构加载全部动作。
+     *
+     * <p>加载时清空现有内存状态后全量重建。未注册的 typeId 对应的动作会被跳过并记录 warning。</p>
+     *
+     * @param data 序列化数据，可为 null 或空（清空状态）
+     */
+    void loadAll(Map<String, Object> data);
 }

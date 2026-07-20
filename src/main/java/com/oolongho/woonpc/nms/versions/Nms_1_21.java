@@ -18,20 +18,28 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Minecraft 1.21.2 - 1.21.4 NMS 适配器实现。
+ * Minecraft 1.21.0 - 1.21.4 NMS 适配器实现。
  *
- * <p>覆盖 1.21.2 至 1.21.4 全部补丁版本。此版本区间的 NMS 特征：</p>
+ * <p>覆盖 1.21.0 至 1.21.4 全部补丁版本。此版本区间的 NMS 特征：</p>
  * <ul>
  *   <li>{@code SynchedEntityData.DataValue.create(EntityDataAccessor, Object)} —— 需要 accessor</li>
- *   <li>{@code ClientboundTeleportEntityPacket} 公开构造器签名为
- *       {@code (int, PositionMoveRotation, Set<Relative>, boolean)}</li>
  *   <li>{@code ClientboundRotateHeadPacket} 仅暴露 {@code (Entity, byte)} 构造器，
  *       需通过 {@code RegistryFriendlyByteBuf + STREAM_CODEC.decode} 绕过</li>
  *   <li>{@code com.mojang.authlib.GameProfile} 为普通类，2 参构造器 {@code (UUID, String)}，
  *       通过 {@code getProperties().put(key, property)} 添加皮肤纹理</li>
  * </ul>
  *
- * <p><b>不支持 1.21.0-1.21.1</b>（与 fancynpcs-v2 决策一致，NMS API 差异过大）。</p>
+ * <h2>1.21.0-1.21.1 版本自适应</h2>
+ * <p>1.21.0-1.21.1 与 1.21.2-1.21.4 的 NMS 差异由 {@link com.oolongho.woonpc.nms.util.PacketFactory}
+ * 内置处理，本类无需区分：</p>
+ * <ul>
+ *   <li>{@code PositionMoveRotation} 仅 1.21.2+ 存在 —— PacketFactory 通过
+ *       {@code getClassOrNull} 容错加载，null 时走 STREAM_CODEC.decode 路径构造 TeleportPacket</li>
+ *   <li>{@code ClientboundAddEntityPacket} 第 11 参 headYaw —— 1.21.2+ 为 float，
+ *       1.21.0-1.21.1 为 double，PacketFactory 扫描构造器按实际类型装箱</li>
+ *   <li>{@code ClientboundPlayerInfoUpdatePacket$Entry} —— 1.21.2+ 为 9 参（含 showHat、listOrder），
+ *       1.21.0-1.21.1 为 7 参，PacketFactory 按参数数量分支</li>
+ * </ul>
  *
  * <h2>包发送流程</h2>
  * <ul>
@@ -41,7 +49,7 @@ import java.util.UUID;
  *   <li>updateLocation：TeleportEntity</li>
  *   <li>updateEquipment：SetEquipment</li>
  *   <li>updateHeadRotation：RotateHead</li>
- *   <li>sendTabRemove：PlayerInfo(UPDATE_LISTED, listed=false)</li>
+ *   <li>updateTabListVisibility：PlayerInfo(UPDATE_LISTED, listed=showInTab)</li>
  * </ul>
  *
  * <h2>子类覆盖点</h2>
@@ -128,12 +136,20 @@ public class Nms_1_21 implements NmsAdapter {
     }
 
     @Override
-    public void sendTabRemove(Player player, int entityId, UUID uuid) {
+    public void updateTabListVisibility(Player player, UUID uuid, boolean showInTab) {
         // UPDATE_LISTED 包仅依赖 UUID 匹配客户端已注册条目，但仍需 GameProfile 引用满足 Entry 构造器签名。
         // 1.21.9+ 由于 GameProfile 变为 record，无法用 2 参构造器创建占位实例，故也走 createGameProfile 钩子。
         Object gameProfile = createGameProfile(uuid, "", null);
-        Object packet = PacketFactory.createPlayerInfoUpdateListedPacket(uuid, gameProfile, false);
+        Object packet = PacketFactory.createPlayerInfoUpdateListedPacket(uuid, gameProfile, showInTab);
         PacketFactory.sendPacket(player, packet);
+    }
+
+    @Override
+    public void updateScale(Player player, int entityId, float scale) {
+        Object packet = PacketFactory.createScaleAttributePacket(entityId, scale);
+        if (packet != null) {
+            PacketFactory.sendPacket(player, packet);
+        }
     }
 
     @Override
@@ -154,7 +170,7 @@ public class Nms_1_21 implements NmsAdapter {
      * </ul>
      *
      * <p>本方法为子类覆盖点，由 {@link PacketFactory#createPlayerInfoAddPacket} 与
-     * {@link PacketFactory#createPlayerInfoUpdateListedPacket} 的调用方（本类的 spawnPlayer / sendTabRemove）
+     * {@link PacketFactory#createPlayerInfoUpdateListedPacket} 的调用方（本类的 spawnPlayer / updateTabListVisibility）
      * 调用，将构造好的 GameProfile 传入 PacketFactory。</p>
      *
      * @param uuid     NPC 的 UUID
