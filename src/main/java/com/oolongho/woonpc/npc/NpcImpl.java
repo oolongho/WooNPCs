@@ -170,11 +170,15 @@ public final class NpcImpl extends Npc {
                 // 同步全息位置（TextDisplay 由 controller.updateLocation 内部处理，此处仅 WooHolograms 全息）
                 WooHologramsHook.getInstance().onNpcMove(getId(), snapshot.location());
             }
-            // DISPLAY_NAME：更新 TextDisplay 文本（SKIN dirty 时跳过，spawn 会重发）
-            if (!skinDirty && dirty.contains(NpcField.DISPLAY_NAME)) {
+            // DISPLAY_NAME / NAME：更新 TextDisplay 文本（SKIN dirty 时跳过，spawn 会重发）。
+            // NAME 字段不发包（仅影响 displayName 渲染与命令查询），但 displayName 渲染依赖 name 拼接，故需同步 TextDisplay。
+            if (!skinDirty && (dirty.contains(NpcField.DISPLAY_NAME) || dirty.contains(NpcField.NAME))) {
                 controller.updateDisplayName(snapshot);
             }
-            // SKIN：皮肤纹理变更，需重新 spawn（despawnAll + spawn）
+            // SKIN：皮肤纹理变更，需重新 spawn（despawnAll + spawn）。
+            // spawn 本身已通过 EntityMetadataBuilder 发送 metadata 包（含 pose/effects/glowColor 等），
+            // 也通过 PacketFactory 发送 Team 包（含 glowColor/collidable），故无需再 updateMetadata/updateGlowColor/updateCollidable。
+            // 但之前的 equipment 与 scale 增量包都随 despawnAll 丢失，需要重发。
             if (skinDirty) {
                 controller.despawnAll();
                 for (UUID playerId : targetViewers) {
@@ -183,6 +187,8 @@ public final class NpcImpl extends Npc {
                         controller.spawn(player, snapshot);
                     }
                 }
+                controller.updateEquipment(snapshot.equipment());
+                controller.updateScale(snapshot.scale());
             }
             // EQUIPMENT：装备包
             if (dirty.contains(NpcField.EQUIPMENT)) {
@@ -196,10 +202,16 @@ public final class NpcImpl extends Npc {
             if (dirty.contains(NpcField.SCALE)) {
                 controller.updateScale(snapshot.scale());
             }
-            // GLOW_COLOR / POSE / EFFECTS / COLLIDABLE：合并为元数据包
-            if (dirty.contains(NpcField.GLOW_COLOR) || dirty.contains(NpcField.POSE)
-                    || dirty.contains(NpcField.EFFECTS)
-                    || dirty.contains(NpcField.COLLIDABLE)) {
+            // GLOW_COLOR：独立分支，通过 Team 包发送（非 entity metadata）
+            if (dirty.contains(NpcField.GLOW_COLOR)) {
+                controller.updateGlowColor(snapshot.glowColor());
+            }
+            // COLLIDABLE：独立分支，通过 Team 包更新 collisionRule（非 entity metadata）
+            if (dirty.contains(NpcField.COLLIDABLE)) {
+                controller.updateCollidable(snapshot.collidable());
+            }
+            // POSE / EFFECTS：合并为元数据包（仅剩这两个字段走 metadata）
+            if (dirty.contains(NpcField.POSE) || dirty.contains(NpcField.EFFECTS)) {
                 controller.updateMetadata(snapshot);
             }
             // TURN_TO_PLAYER / TURN_TO_PLAYER_DISTANCE / VISIBILITY_DISTANCE / VISIBILITY_PERMISSIONS / INTERACTION_COOLDOWN：
@@ -280,6 +292,11 @@ public final class NpcImpl extends Npc {
         }
         synchronized (this) {
             data = updater.apply(data);
+            // NAME 字段需同步 NpcManagerImpl 的 nameIndex 索引（原子 putIfAbsent + remove 旧名）。
+            // 若新名已被占用，rename 抛 IllegalStateException 向上传播，与外部调用 npc.setName 的契约一致。
+            if (field == NpcField.NAME) {
+                manager.rename(getId(), (String) newValue);
+            }
         }
         update();  // synchronized，同步 dirty 字段到客户端
     }

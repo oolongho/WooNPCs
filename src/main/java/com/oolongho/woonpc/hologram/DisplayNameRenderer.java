@@ -4,10 +4,14 @@ import com.oolongho.woonpc.api.NpcData;
 import com.oolongho.woonpc.nms.dto.MetadataEntry;
 import com.oolongho.woonpc.nms.util.PacketFactory;
 import com.oolongho.woonpc.nms.versions.EntityIdGenerator;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.minimessage.MiniMessage;
+import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.ApiStatus;
+import org.jetbrains.annotations.NotNull;
 
 import java.util.List;
 import java.util.Objects;
@@ -37,7 +41,8 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <h2>渲染策略</h2>
  * <ul>
- *   <li>{@code NpcData.displayName() == null} 时，本渲染器对该玩家不激活（不发送任何包）</li>
+ *   <li>{@code NpcData.displayName() == null} 时，回落到 {@code NpcData.name()} 渲染（始终显示文本）</li>
+ *   <li>文本经 {@link #parseDisplayName(String)} 解析，支持 {@code &} 颜色代码与 MiniMessage 标签</li>
  *   <li>首次激活（{@link #showTo}）发送 AddEntity(TextDisplay) + SetEntityData(text)</li>
  *   <li>后续文本变化（{@link #updateText}）仅发送 SetEntityData 更新 DATA_TEXT_ID（index 23）</li>
  *   <li>位置变化（{@link #updateLocation}）发送 TeleportEntity 更新 TextDisplay 位置</li>
@@ -67,6 +72,12 @@ public final class DisplayNameRenderer {
     /** TextDisplay 实体相对 NPC 实体脚下的 Y 轴偏移（NPC 头顶上方 2.0 方块） */
     private static final double DISPLAY_NAME_OFFSET_Y = 2.0;
 
+    /** {@code &} 颜色代码解析器（如 {@code &a} → green） */
+    private static final LegacyComponentSerializer LEGACY = LegacyComponentSerializer.legacy('&');
+
+    /** MiniMessage 标签解析器（如 {@code <green>} → green） */
+    private static final MiniMessage MM = MiniMessage.miniMessage();
+
     /** TextDisplay 实体 ID（构造时预分配，生命周期内不变） */
     private final int displayEntityId;
 
@@ -88,8 +99,8 @@ public final class DisplayNameRenderer {
     /**
      * 让指定玩家看到 NPC 头顶显示名。
      *
-     * <p>若 NPC 当前无显示名（{@code data.displayName() == null}），先确保对该玩家的渲染已卸载，
-     * 然后直接返回（不激活）。若已激活，转为 {@link #updateText} 调用（幂等）。</p>
+     * <p>渲染文本规则：{@code data.displayName() != null} 时使用 displayName，
+     * 否则回落到 {@code data.name()}（始终显示文本，不主动隐藏）。</p>
      *
      * <p>首次激活时发送：</p>
      * <ol>
@@ -103,18 +114,15 @@ public final class DisplayNameRenderer {
     public void showTo(Player player, NpcData data) {
         Objects.requireNonNull(player, "player cannot be null");
         Objects.requireNonNull(data, "data cannot be null");
-        if (data.displayName() == null) {
-            hideFrom(player);
-            return;
-        }
         if (!activeViewers.add(player.getUniqueId())) {
             // 已激活，转 updateText 保持幂等
             updateText(player, data);
             return;
         }
+        String displayText = data.displayName() != null ? data.displayName() : data.name();
         Location displayLoc = data.location().clone().add(0, DISPLAY_NAME_OFFSET_Y, 0);
         Object spawnPacket = PacketFactory.createAddTextDisplayPacket(displayEntityId, displayUuid, displayLoc);
-        Object textComponent = PacketFactory.createComponent(data.displayName());
+        Object textComponent = PacketFactory.createComponent(parseDisplayName(displayText));
         List<MetadataEntry> entries = List.of(
                 new MetadataEntry(TEXT_DISPLAY_TEXT_INDEX, SER_COMPONENT, textComponent));
         Object metadataPacket = PacketFactory.createMetadataPacket(displayEntityId, entries);
@@ -142,7 +150,7 @@ public final class DisplayNameRenderer {
      * 更新 TextDisplay 的文本内容。
      *
      * <p>仅对已激活的玩家发送 {@code SetEntityData} 更新 DATA_TEXT_ID。
-     * 若 {@code data.displayName() == null}，转为 {@link #hideFrom} 卸载显示名。</p>
+     * 渲染文本规则同 {@link #showTo}：displayName 非 null 时用 displayName，否则回落到 name()。</p>
      *
      * @param player 目标玩家
      * @param data   NPC 数据快照
@@ -153,11 +161,8 @@ public final class DisplayNameRenderer {
         if (!activeViewers.contains(player.getUniqueId())) {
             return;
         }
-        if (data.displayName() == null) {
-            hideFrom(player);
-            return;
-        }
-        Object textComponent = PacketFactory.createComponent(data.displayName());
+        String displayText = data.displayName() != null ? data.displayName() : data.name();
+        Object textComponent = PacketFactory.createComponent(parseDisplayName(displayText));
         List<MetadataEntry> entries = List.of(
                 new MetadataEntry(TEXT_DISPLAY_TEXT_INDEX, SER_COMPONENT, textComponent));
         Object metadataPacket = PacketFactory.createMetadataPacket(displayEntityId, entries);
@@ -200,6 +205,35 @@ public final class DisplayNameRenderer {
             }
         }
         activeViewers.clear();
+    }
+
+    // ==================== 文本解析 ====================
+
+    /**
+     * 解析显示名文本为 Adventure {@link Component}，支持 {@code &} 颜色代码与 MiniMessage 标签。
+     *
+     * <p>解析顺序：先用 {@link LegacyComponentSerializer#legacy(char)} 解析 {@code &} 颜色代码
+     * （如 {@code &a} → green），再将结果序列化为 MiniMessage 字符串后用 {@link MiniMessage#miniMessage()}
+     * 反序列化，使 MiniMessage 标签（如 {@code <green>}）也生效。</p>
+     *
+     * <p>典型用例：</p>
+     * <ul>
+     *   <li>{@code "&atest"} → 绿色文本 "test"</li>
+     *   <li>{@code "<green>test"} → 绿色文本 "test"</li>
+     *   <li>{@code "&a<green>test"} → 绿色 + 绿色（合并）的 "test"</li>
+     *   <li>{@code "&atest<bold>bold"} → 绿色 "test" + 绿色加粗 "bold"</li>
+     * </ul>
+     *
+     * @param text 原始文本（含 {@code &} 颜色代码或 MiniMessage 标签），不可为 null
+     * @return 解析后的 Adventure Component
+     */
+    public static Component parseDisplayName(@NotNull String text) {
+        // 1. LegacyComponentSerializer 解析 & 颜色代码，< > 等字符作为字面量保留在 Component 中
+        Component legacyComponent = LEGACY.deserialize(text);
+        // 2. 序列化为 MiniMessage 字符串（颜色变为 <green> 等标签，字面 < > 转义保留）
+        String miniStr = MM.serialize(legacyComponent);
+        // 3. MiniMessage 反序列化，使原 <tag> 与步骤 1 转换后的颜色标签同时生效
+        return MM.deserialize(miniStr);
     }
 
     // ==================== 状态查询 ====================

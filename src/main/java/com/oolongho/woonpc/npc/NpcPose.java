@@ -11,9 +11,8 @@ package com.oolongho.woonpc.npc;
  * 用于反射构造 {@code Pose.valueOf(upperName)} 时反向还原。</p>
  *
  * <h2>版本兼容</h2>
- * <p>{@code CROAKING}、{@code USING_TONGUE}、{@code ROARING}、{@code SNIFFING}、
- * {@code EMERGING}、{@code DIGGING}、{@code SITTING} 等为 1.19+ 新增姿态，
- * 在 1.21+ 服务端上全部受支持。</p>
+ * <p>已移除 Mob-only 姿势（CROAKING/USING_TONGUE/ROARING/SNIFFING/EMERGING/DIGGING），
+ * 旧数据反序列化时映射到 STANDING。</p>
  *
  * @author oolongho
  */
@@ -43,26 +42,8 @@ public enum NpcPose {
     /** 死亡动画 */
     DYING("dying"),
 
-    /** 青蛙鸣叫 */
-    CROAKING("croaking"),
-
-    /** 舌头伸出（青蛙） */
-    USING_TONGUE("using_tongue"),
-
     /** 坐下（1.21.0+ 玩家通用姿势） */
-    SITTING("sitting"),
-
-    /** 咆哮（监守者） */
-    ROARING("roaring"),
-
-    /** 嗅探（嗅探兽） */
-    SNIFFING("sniffing"),
-
-    /** 钻出（嗅探兽从蛋中孵化） */
-    EMERGING("emerging"),
-
-    /** 钻入（嗅探兽钻地） */
-    DIGGING("digging");
+    SITTING("sitting");
 
     /** NMS Pose 名称（小写带下划线） */
     private final String nmsName;

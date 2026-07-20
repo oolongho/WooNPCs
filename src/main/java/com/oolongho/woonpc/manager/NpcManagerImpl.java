@@ -134,6 +134,38 @@ public final class NpcManagerImpl implements NpcManager {
         return true;
     }
 
+    /**
+     * 重命名 NPC（内部 API，由 NpcImpl.modify 在 field=NAME 时调用）。
+     *
+     * <p>原子操作：先 putIfAbsent(newName, id) 抢占新名，再 remove(oldName, id) 清理旧名。
+     * 若新名已被其他 NPC 占用，抛 IllegalStateException 并回滚（putIfAbsent 返回非 null）。</p>
+     *
+     * @param id      NPC 的 UUID
+     * @param newName 新名称
+     * @throws IllegalStateException 当新名已被占用
+     */
+    @ApiStatus.Internal
+    public void rename(UUID id, String newName) {
+        Objects.requireNonNull(id, "id cannot be null");
+        Objects.requireNonNull(newName, "newName cannot be null");
+        // 先查找当前 NPC 的旧名
+        Npc npc = npcs.get(id);
+        if (npc == null) {
+            throw new IllegalStateException("NPC " + id + " not found");
+        }
+        String oldName = npc.getName();
+        if (oldName.equals(newName)) {
+            return; // 未变更
+        }
+        // 抢占新名
+        UUID prevOwner = nameIndex.putIfAbsent(newName, id);
+        if (prevOwner != null && !prevOwner.equals(id)) {
+            throw new IllegalStateException("Name '" + newName + "' already used by another NPC");
+        }
+        // 清理旧名（2-arg remove 防御同名误删）
+        nameIndex.remove(oldName, id);
+    }
+
     @Override
     public boolean contains(UUID id) {
         Objects.requireNonNull(id, "id cannot be null");

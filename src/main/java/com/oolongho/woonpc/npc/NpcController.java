@@ -8,9 +8,11 @@ import com.oolongho.woonpc.nms.NmsAdapterFactory;
 import com.oolongho.woonpc.nms.dto.NpcEquipmentData;
 import com.oolongho.woonpc.nms.dto.NpcMetadataData;
 import com.oolongho.woonpc.nms.dto.NpcSpawnData;
+import com.oolongho.woonpc.nms.util.PacketFactory;
 import com.oolongho.woonpc.nms.versions.EntityIdGenerator;
 import com.oolongho.woonpc.nms.versions.EntityMetadataBuilder;
 import com.oolongho.woonpc.util.VersionUtil;
+import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
@@ -20,6 +22,7 @@ import org.jetbrains.annotations.ApiStatus;
 
 import java.util.Collections;
 import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -77,6 +80,15 @@ public final class NpcController {
     /** 头顶显示名渲染器（独立 TextDisplay 实体的全生命周期管理） */
     private final DisplayNameRenderer displayNameRenderer;
 
+    /** Scoreboard Team 名称（基于 entityId 全局唯一，用于隐藏 GameProfile 名牌 + 控制碰撞 + 彩色发光） */
+    private final String teamName;
+
+    /** 当前 Team 的 collisionRule 状态缓存（{@code false} → NEVER，{@code true} → ALWAYS） */
+    private boolean currentCollidable = false;
+
+    /** 当前 Team 的 color 状态缓存（{@link GlowingColor#NONE} 时不发送 color） */
+    private GlowingColor currentGlowColor = GlowingColor.NONE;
+
     /**
      * 构造控制器。
      *
@@ -98,6 +110,7 @@ public final class NpcController {
         this.adapter = NmsAdapterFactory.createAdapter(VersionUtil.getServerVersion());
         this.visiblePlayers = ConcurrentHashMap.newKeySet();
         this.displayNameRenderer = new DisplayNameRenderer();
+        this.teamName = "woonpc_" + entityId;
     }
 
     // ==================== 生命周期：生成 / 销毁 ====================
@@ -125,6 +138,10 @@ public final class NpcController {
         if (!visiblePlayers.add(player.getUniqueId())) {
             return; // 已可见，幂等跳过
         }
+
+        // 先发送 Team 创建包（隐藏 GameProfile 名牌 + 控制碰撞 + 设置彩色发光），
+        // 确保客户端在生成实体前已应用 Team 规则
+        sendTeamCreate(player, data);
 
         NpcSpawnData spawnData = new NpcSpawnData(
                 entityId,
@@ -156,6 +173,8 @@ public final class NpcController {
         }
         adapter.despawn(player, entityId, uuid);
         displayNameRenderer.hideFrom(player);
+        // despawn 实体后清理客户端 Team 缓存
+        sendTeamRemove(player);
     }
 
     /**
@@ -169,6 +188,8 @@ public final class NpcController {
             if (player != null && player.isOnline()) {
                 adapter.despawn(player, entityId, uuid);
                 displayNameRenderer.hideFrom(player);
+                // despawn 实体后清理客户端 Team 缓存
+                sendTeamRemove(player);
             }
         }
         visiblePlayers.clear();
@@ -291,17 +312,51 @@ public final class NpcController {
     }
 
     /**
+     * 更新 Team 包的 color 字段（重发 Team 更新包）。
+     *
+     * <p>当 {@link NpcField#GLOW_COLOR} 字段运行时切换时调用。
+     * 内部委托 {@link PacketFactory#createTeamUpdatePacket} 发送 mode=2 更新包，
+     * 合并 nameTagVisibility / collisionRule / push / color 四项字段。</p>
+     *
+     * <p>本方法仅更新 {@link #currentGlowColor} 缓存，{@code collisionRule} 取自上次
+     * spawn 或 {@link #updateCollidable} 设置的 {@link #currentCollidable}。</p>
+     *
+     * @param glowColor 新的发光颜色，不可为 null（{@link GlowingColor#NONE} 表示清除颜色）
+     */
+    public void updateGlowColor(GlowingColor glowColor) {
+        Objects.requireNonNull(glowColor, "glowColor cannot be null");
+        this.currentGlowColor = glowColor;
+        sendTeamUpdate();
+    }
+
+    /**
+     * 更新 Team 包的 collisionRule 字段（重发 Team 更新包）。
+     *
+     * <p>当 {@link NpcField#COLLIDABLE} 字段运行时切换时调用。
+     * 内部委托 {@link PacketFactory#createTeamUpdatePacket} 发送 mode=2 更新包。</p>
+     *
+     * <p>本方法仅更新 {@link #currentCollidable} 缓存，{@code color} 取自上次
+     * spawn 或 {@link #updateGlowColor} 设置的 {@link #currentGlowColor}。</p>
+     *
+     * @param collidable {@code true} → collisionRule=ALWAYS，{@code false} → NEVER
+     */
+    public void updateCollidable(boolean collidable) {
+        this.currentCollidable = collidable;
+        sendTeamUpdate();
+    }
+
+    /**
      * 更新头顶显示名文本。
      *
-     * <p>委托 {@link DisplayNameRenderer#showTo} 完成显示名同步。{@code showTo} 自适应三种场景：</p>
+     * <p>委托 {@link DisplayNameRenderer#showTo} 完成显示名同步。{@code showTo} 自适应两种场景：</p>
      * <ul>
-     *   <li>{@code displayName == null}：调 {@link DisplayNameRenderer#hideFrom} 卸载已激活的 TextDisplay</li>
      *   <li>已激活：转 {@link DisplayNameRenderer#updateText} 仅发送 SetEntityData 更新文本</li>
-     *   <li>未激活且 {@code displayName != null}：发送 AddEntity + SetEntityData 创建 TextDisplay</li>
+     *   <li>未激活：发送 AddEntity + SetEntityData 创建 TextDisplay</li>
      * </ul>
      *
-     * <p>使用 {@code showTo} 而非 {@code updateText} 是为了修复 displayName 从 null → 非 null 切换时，
-     * 玩家已在 visiblePlayers 但未在 activeViewers 中（首次 spawn 时 displayName 为 null 走 hideFrom 早退分支），
+     * <p>渲染文本始终非空：{@code displayName != null} 时用 displayName，否则回落到 {@code name()}。
+     * 使用 {@code showTo} 而非 {@code updateText} 是为了修复 displayName 从 null → 非 null 切换时，
+     * 玩家已在 visiblePlayers 但未在 activeViewers 中（首次 spawn 时 displayName 为 null 不激活渲染），
      * 导致 updateText 因 activeViewers 不含该玩家而早退、TextDisplay 永不创建的问题。</p>
      *
      * @param data NPC 数据快照
@@ -315,6 +370,108 @@ public final class NpcController {
                 displayNameRenderer.showTo(player, data);
             }
         }
+    }
+
+    // ==================== Team 包（私有） ====================
+
+    /**
+     * 发送 Team 创建包给指定玩家。
+     *
+     * <p>Team 包实现三种功能：</p>
+     * <ul>
+     *   <li>{@code nameTagVisibility=NEVER}：隐藏 GameProfile username 的玩家名牌（避免与 TextDisplay 头顶显示名双显）</li>
+     *   <li>{@code collisionRule=NEVER/ALWAYS}：控制客户端碰撞体积（由 {@link NpcData#collidable()} 决定）</li>
+     *   <li>{@code color=NamedTextColor}：彩色发光描边（{@link GlowingColor#NONE} 时不发送 color）</li>
+     * </ul>
+     *
+     * <p>必须在 {@code spawnPlayer} 之前发送，确保客户端在生成实体前已应用 Team 规则。
+     * 同时刷新 {@link #currentCollidable} 与 {@link #currentGlowColor} 缓存，
+     * 供后续 {@link #updateGlowColor} / {@link #updateCollidable} 重发更新包使用。</p>
+     *
+     * @param player 目标玩家
+     * @param data   NPC 数据快照
+     */
+    private void sendTeamCreate(Player player, NpcData data) {
+        this.currentCollidable = data.collidable();
+        this.currentGlowColor = data.glowColor();
+        boolean collisionNever = !data.collidable();
+        NamedTextColor color = data.glowColor().isColored() ? toNamedTextColor(data.glowColor()) : null;
+        Object teamPacket = PacketFactory.createTeamCreatePacket(
+                teamName,
+                List.of(username),
+                true,           // nameTagVisibility=NEVER 始终隐藏 GameProfile 名牌
+                collisionNever,
+                true,           // pushNever：与 collisionNever 联动，NMS 合并判定
+                color);
+        PacketFactory.sendPacket(player, teamPacket);
+    }
+
+    /**
+     * 发送 Team 移除包给指定玩家。
+     *
+     * <p>NPC despawn 后调用，清理客户端的 Team 缓存。仅依赖 teamName，
+     * 与 {@link #currentCollidable} / {@link #currentGlowColor} 状态无关。</p>
+     *
+     * @param player 目标玩家
+     */
+    private void sendTeamRemove(Player player) {
+        Object teamPacket = PacketFactory.createTeamRemovePacket(teamName);
+        PacketFactory.sendPacket(player, teamPacket);
+    }
+
+    /**
+     * 向所有可见玩家发送 Team 更新包（mode=2）。
+     *
+     * <p>用于运行时切换 {@link NpcField#GLOW_COLOR} 或 {@link NpcField#COLLIDABLE} 字段。
+     * 字段值取自 {@link #currentCollidable} 与 {@link #currentGlowColor} 缓存，
+     * 调用方（{@link #updateGlowColor} / {@link #updateCollidable}）需先更新对应缓存。</p>
+     */
+    private void sendTeamUpdate() {
+        boolean collisionNever = !currentCollidable;
+        NamedTextColor color = currentGlowColor.isColored() ? toNamedTextColor(currentGlowColor) : null;
+        Object teamPacket = PacketFactory.createTeamUpdatePacket(
+                teamName,
+                true,           // nameTagVisibility=NEVER 始终隐藏
+                collisionNever,
+                true,           // pushNever：与 collisionNever 联动
+                color);
+        for (UUID playerId : visiblePlayers) {
+            Player player = Bukkit.getPlayer(playerId);
+            if (player != null && player.isOnline()) {
+                PacketFactory.sendPacket(player, teamPacket);
+            }
+        }
+    }
+
+    /**
+     * 将 {@link GlowingColor} 转换为 Adventure {@link NamedTextColor}。
+     *
+     * <p>调用方应先通过 {@link GlowingColor#isColored()} 过滤 {@link GlowingColor#NONE}，
+     * 本方法对 {@link GlowingColor#NONE} 返回 null（不应到达分支）。</p>
+     *
+     * @param glowColor 发光颜色
+     * @return 对应的 NamedTextColor，{@link GlowingColor#NONE} 返回 null
+     */
+    private static NamedTextColor toNamedTextColor(GlowingColor glowColor) {
+        return switch (glowColor) {
+            case NONE -> null;
+            case BLACK -> NamedTextColor.BLACK;
+            case DARK_BLUE -> NamedTextColor.DARK_BLUE;
+            case DARK_GREEN -> NamedTextColor.DARK_GREEN;
+            case DARK_AQUA -> NamedTextColor.DARK_AQUA;
+            case DARK_RED -> NamedTextColor.DARK_RED;
+            case DARK_PURPLE -> NamedTextColor.DARK_PURPLE;
+            case GOLD -> NamedTextColor.GOLD;
+            case GRAY -> NamedTextColor.GRAY;
+            case DARK_GRAY -> NamedTextColor.DARK_GRAY;
+            case BLUE -> NamedTextColor.BLUE;
+            case GREEN -> NamedTextColor.GREEN;
+            case AQUA -> NamedTextColor.AQUA;
+            case RED -> NamedTextColor.RED;
+            case LIGHT_PURPLE -> NamedTextColor.LIGHT_PURPLE;
+            case YELLOW -> NamedTextColor.YELLOW;
+            case WHITE -> NamedTextColor.WHITE;
+        };
     }
 
     // ==================== 移动 ====================
