@@ -134,9 +134,9 @@ public final class NpcConfirmGui extends GuiScreen {
 
     // ==================== 辅助方法 ====================
 
-    /** 构造灰色玻璃背景按钮（空白名称） */
+    /** 构造黄绿色玻璃背景按钮（空白名称） */
     private GuiButton backgroundButton() {
-        return GuiButton.builder(Material.GRAY_STAINED_GLASS_PANE)
+        return GuiButton.builder(Material.LIME_STAINED_GLASS_PANE)
                 .name(" ")
                 .build();
     }

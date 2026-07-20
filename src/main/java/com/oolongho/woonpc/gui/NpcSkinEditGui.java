@@ -29,7 +29,6 @@ import java.util.UUID;
  *
  * <p>展示当前皮肤预览，提供以下编辑入口：</p>
  * <ul>
- *   <li>手动输入 texture / signature（聊天输入）</li>
  *   <li>从玩家名异步获取皮肤（{@link SkinManager}）</li>
  *   <li>重置为默认 Steve 皮肤</li>
  * </ul>
@@ -37,8 +36,8 @@ import java.util.UUID;
  * <h2>布局</h2>
  * <pre>
  * Row 1 (0-8):   [返回][背景][背景][背景][当前皮肤][背景][背景][背景][背景]
- * Row 2 (9-17):  [输入texture][背景][背景][背景][输入signature][背景][背景][背景][背景]
- * Row 3 (18-26): [从玩家获取][背景][背景][背景][重置默认][背景][背景][背景][背景]
+ * Row 2 (9-17):  [背景][从玩家获取][背景][占位][背景][背景][背景][重置默认][背景]
+ * Row 3 (18-26): [背景][背景][背景][背景][操作说明][背景][背景][背景][背景]
  * </pre>
  *
  * <h2>异步回调线程切换</h2>
@@ -71,7 +70,7 @@ public final class NpcSkinEditGui extends GuiScreen {
      * @param storage          NPC 持久化存储
      * @param skinManager      皮肤管理器（异步获取玩家皮肤）
      * @param guiManager       GUI 管理器（返回导航）
-     * @param chatInputManager 聊天输入管理器（texture / signature / 玩家名输入）
+     * @param chatInputManager 聊天输入管理器（玩家名输入）
      * @param scheduler        调度器（异步皮肤回调切回主线程使用）
      * @param npcId            目标 NPC 的 UUID
      * @param parent           父级 GUI（通常为 NpcDetailGui）
@@ -137,59 +136,11 @@ public final class NpcSkinEditGui extends GuiScreen {
         }
         setButton(4, headBuilder.build());
 
-        // [9] 输入 texture（关闭 GUI → 聊天输入 → 重开）
-        setButton(9, GuiButton.builder(Material.OAK_SIGN)
-                .name("<aqua>输入 texture")
-                .lore(List.of("<gray>点击输入皮肤 texture 值"))
-                .onClick(ctx -> {
-                    Player p = ctx.player();
-                    guiManager.closeGui(p);
-                    String oldSignature = npc.getData().skin().signature();
-                    chatInputManager.requestInput(p,
-                            "<aqua>请输入 skin texture（长字符串），输入 cancel 取消",
-                            ChatInputManager.InputType.SKIN_TEXTURE,
-                            texture -> {
-                                npc.setSkin(new SkinData(texture, oldSignature));
-                                storage.save(npc);
-                                p.sendMessage(MM.deserialize("<green>皮肤 texture 已更新。"));
-                                guiManager.openGui(p, new NpcSkinEditGui(plugin, npcManager, storage,
-                                        skinManager, guiManager, chatInputManager, scheduler, npcId, parent));
-                            });
-                })
-                .build());
+        // [9] 背景
+        setButton(9, backgroundButton());
 
-        // [10-12, 14-17] 背景
-        setButton(10, backgroundButton());
-        setButton(11, backgroundButton());
-        setButton(12, backgroundButton());
-        setButton(14, backgroundButton());
-        setButton(15, backgroundButton());
-        setButton(16, backgroundButton());
-        setButton(17, backgroundButton());
-
-        // [13] 输入 signature
-        setButton(13, GuiButton.builder(Material.OAK_SIGN)
-                .name("<aqua>输入 signature")
-                .lore(List.of("<gray>点击输入皮肤 signature 值"))
-                .onClick(ctx -> {
-                    Player p = ctx.player();
-                    guiManager.closeGui(p);
-                    String currentTexture = npc.getData().skin().texture();
-                    chatInputManager.requestInput(p,
-                            "<aqua>请输入 skin signature（长字符串），输入 cancel 取消",
-                            ChatInputManager.InputType.SKIN_SIGNATURE,
-                            signature -> {
-                                npc.setSkin(new SkinData(currentTexture, signature));
-                                storage.save(npc);
-                                p.sendMessage(MM.deserialize("<green>皮肤 signature 已更新。"));
-                                guiManager.openGui(p, new NpcSkinEditGui(plugin, npcManager, storage,
-                                        skinManager, guiManager, chatInputManager, scheduler, npcId, parent));
-                            });
-                })
-                .build());
-
-        // [18] 从玩家获取（异步 SkinManager.getSkin → 主线程更新 NPC + 重开 GUI）
-        setButton(18, GuiButton.builder(Material.COMPASS)
+        // [10] 从玩家获取（异步 SkinManager.getSkin → 主线程更新 NPC + 重开 GUI）
+        setButton(10, GuiButton.builder(Material.COMPASS)
                 .name("<aqua>从玩家获取皮肤")
                 .lore(List.of("<gray>输入玩家名获取其皮肤"))
                 .onClick(ctx -> {
@@ -222,13 +173,25 @@ public final class NpcSkinEditGui extends GuiScreen {
                 })
                 .build());
 
-        // [19-21] 背景
-        setButton(19, backgroundButton());
-        setButton(20, backgroundButton());
-        setButton(21, backgroundButton());
+        // [11] 背景
+        setButton(11, backgroundButton());
 
-        // [22] 重置默认
-        setButton(22, GuiButton.builder(Material.STRUCTURE_VOID)
+        // [12] coming soon（未来扩展 URL/mineskin 输入）
+        setButton(12, GuiButton.builder(Material.BARRIER)
+                .name("<gray>从 URL 获取皮肤")
+                .lore(List.of(
+                        "<dark_gray>敬请期待",
+                        "<dark_gray>未来支持 URL/mineskin 输入"
+                ))
+                .build());
+
+        // [13-15] 背景
+        setButton(13, backgroundButton());
+        setButton(14, backgroundButton());
+        setButton(15, backgroundButton());
+
+        // [16] 重置默认
+        setButton(16, GuiButton.builder(Material.STRUCTURE_VOID)
                 .name("<red>重置默认皮肤")
                 .lore(List.of("<gray>恢复为 Steve 默认皮肤"))
                 .onClick(ctx -> {
@@ -237,6 +200,25 @@ public final class NpcSkinEditGui extends GuiScreen {
                     ctx.player().sendMessage(MM.deserialize("<green>已重置为默认皮肤。"));
                     refresh();
                 })
+                .build());
+
+        // [17] 背景
+        setButton(17, backgroundButton());
+
+        // [18-21] 背景
+        setButton(18, backgroundButton());
+        setButton(19, backgroundButton());
+        setButton(20, backgroundButton());
+        setButton(21, backgroundButton());
+
+        // [22] 操作说明
+        setButton(22, GuiButton.builder(Material.PAPER)
+                .name("<aqua>操作说明")
+                .lore(List.of(
+                        "<gray>从玩家获取: 输入玩家名获取其皮肤",
+                        "<gray>重置默认: 恢复为 Steve 默认皮肤",
+                        "<dark_gray>未来将支持 URL/mineskin 获取"
+                ))
                 .build());
 
         // [23-26] 背景
@@ -268,9 +250,9 @@ public final class NpcSkinEditGui extends GuiScreen {
 
     // ==================== 辅助方法 ====================
 
-    /** 构造灰色玻璃背景按钮（空白名称） */
+    /** 构造黄绿色玻璃背景按钮（空白名称） */
     private GuiButton backgroundButton() {
-        return GuiButton.builder(Material.GRAY_STAINED_GLASS_PANE)
+        return GuiButton.builder(Material.LIME_STAINED_GLASS_PANE)
                 .name(" ")
                 .build();
     }

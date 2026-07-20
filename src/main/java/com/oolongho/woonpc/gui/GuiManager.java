@@ -1,13 +1,16 @@
 package com.oolongho.woonpc.gui;
 
 import com.oolongho.woonpc.WooNPCs;
+import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -31,9 +34,10 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <h2>事件优先级</h2>
  * <ul>
- *   <li>{@link InventoryClickEvent}：{@link EventPriority#HIGH} — 取消事件 + 委托 handleClick</li>
+ *   <li>{@link InventoryClickEvent}：{@link EventPriority#HIGH} — 物品槽位特殊处理（写入光标/清空/克隆），
+ *       普通按钮取消事件 + 委托 handleClick</li>
  *   <li>{@link InventoryCloseEvent}：{@link EventPriority#MONITOR} — 从 openGuis 移除（不取消）</li>
- *   <li>{@link InventoryDragEvent}：{@link EventPriority#HIGH} — 取消事件（装备编辑 GUI 自行处理 drag）</li>
+ *   <li>{@link InventoryDragEvent}：{@link EventPriority#HIGH} — 取消事件（GUI 不允许拖拽）</li>
  * </ul>
  *
  * <h2>线程安全</h2>
@@ -116,9 +120,17 @@ public final class GuiManager implements Listener {
     // ==================== 事件监听 ====================
 
     /**
-     * Inventory 点击事件：取消事件并委托给 {@link GuiScreen#handleClick}。
+     * Inventory 点击事件：物品槽位特殊处理（写入光标/清空/克隆到背包），普通按钮取消事件 + handleClick。
      *
      * <p>仅处理当前由 GuiManager 管理的 GUI，其他 Inventory 不干预。</p>
+     *
+     * <h3>物品槽位交互规则</h3>
+     * <ul>
+     *   <li>左键（光标有物品）：将光标物品写入槽位，清空光标，触发 {@link GuiScreen#onItemSlotClick}</li>
+     *   <li>右键：清空槽位，触发 {@link GuiScreen#onItemSlotClick}（newItem 为 null）</li>
+     *   <li>Shift+点击：克隆槽位物品到玩家背包（不修改 NPC 装备，不触发回调）</li>
+     *   <li>其他点击（如双击、数字键）：取消事件，不做处理</li>
+     * </ul>
      *
      * @param event InventoryClickEvent
      */
@@ -135,10 +147,42 @@ public final class GuiManager implements Listener {
         if (!event.getInventory().equals(gui.getInventory())) {
             return;
         }
+        int rawSlot = event.getRawSlot();
+        boolean isTopInventory = rawSlot >= 0 && rawSlot < event.getInventory().getSize();
+        ClickType click = event.getClick();
+
+        // 顶部 Inventory 的物品槽位：特殊处理（拖物品/取物品/清空）
+        if (isTopInventory && gui.isItemSlot(rawSlot)) {
+            event.setCancelled(true);  // 取消 Bukkit 默认处理，由本方法手动写入
+            ItemStack current = event.getCurrentItem();
+
+            if (click == ClickType.RIGHT) {
+                // 右键清空槽位
+                gui.getInventory().setItem(rawSlot, null);
+                gui.onItemSlotClick(player, rawSlot, null, click);
+            } else if (click.isShiftClick()) {
+                // Shift+点击：克隆装备到玩家背包（不从 NPC 移除）
+                if (current != null && current.getType() != Material.AIR) {
+                    player.getInventory().addItem(current.clone());
+                }
+            } else if (click == ClickType.LEFT || click == ClickType.MIDDLE) {
+                // 左键/中键：放入光标物品
+                ItemStack cursor = event.getCursor();
+                if (cursor != null && cursor.getType() != Material.AIR) {
+                    ItemStack newItem = cursor.clone();
+                    gui.getInventory().setItem(rawSlot, newItem);
+                    event.setCursor(null);
+                    gui.onItemSlotClick(player, rawSlot, newItem, click);
+                }
+            }
+            return;
+        }
+
+        // 普通按钮槽位或底部背包点击：取消事件
         event.setCancelled(true);
         // rawSlot 仅在点击顶部 Inventory 时才有意义，底部背包点击忽略
-        if (event.getRawSlot() < event.getInventory().getSize()) {
-            gui.handleClick(player, event.getRawSlot(), event.getClick());
+        if (isTopInventory) {
+            gui.handleClick(player, rawSlot, click);
         }
     }
 
@@ -166,9 +210,7 @@ public final class GuiManager implements Listener {
     }
 
     /**
-     * Inventory 拖拽事件：取消事件（GUI 不允许拖拽）。
-     *
-     * <p>装备编辑 GUI 如需支持拖拽放入，将在子类中单独处理。</p>
+     * Inventory 拖拽事件：取消事件（GUI 不允许拖拽，物品槽位仅支持点击交互）。
      *
      * @param event InventoryDragEvent
      */

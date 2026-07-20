@@ -146,7 +146,7 @@ public final class NpcListGui extends GuiScreen {
     // ==================== Row 1 背景填充 ====================
 
     /**
-     * 填充 Row 1 中未被工具栏占用的槽位（1/2/3/5/7）为灰色玻璃背景。
+     * 填充 Row 1 中未被工具栏占用的槽位（1/2/3/5/7）为黄绿色玻璃背景。
      */
     private void fillFirstRow() {
         for (int slot : new int[]{1, 2, 3, 5, 7}) {
@@ -418,9 +418,9 @@ public final class NpcListGui extends GuiScreen {
 
     // ==================== 辅助方法 ====================
 
-    /** 构造灰色玻璃背景按钮（空白名称） */
+    /** 构造黄绿色玻璃背景按钮（空白名称） */
     private GuiButton backgroundButton() {
-        return GuiButton.builder(Material.GRAY_STAINED_GLASS_PANE)
+        return GuiButton.builder(Material.LIME_STAINED_GLASS_PANE)
                 .name(" ")
                 .build();
     }

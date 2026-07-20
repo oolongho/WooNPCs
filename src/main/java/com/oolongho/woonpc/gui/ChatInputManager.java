@@ -263,26 +263,6 @@ public final class ChatInputManager implements Listener {
             }
             return null;
         }),
-        /** 皮肤纹理值：base64，长度 1-512 */
-        SKIN_TEXTURE(s -> {
-            if (s.isEmpty() || s.length() > 512) {
-                return "皮肤 texture 长度无效（1-512）";
-            }
-            if (!s.matches("[A-Za-z0-9+/=]+")) {
-                return "皮肤 texture 必须为 base64 字符";
-            }
-            return null;
-        }),
-        /** 皮肤签名值：base64，长度 0-1024（可空表示无签名） */
-        SKIN_SIGNATURE(s -> {
-            if (s.length() > 1024) {
-                return "皮肤 signature 长度超出限制（最长 1024）";
-            }
-            if (!s.isEmpty() && !s.matches("[A-Za-z0-9+/=]+")) {
-                return "皮肤 signature 必须为 base64 字符";
-            }
-            return null;
-        }),
         /** 玩家名：3-16 字符，字母/数字/下划线 */
         PLAYER_NAME(s -> {
             if (s.length() < 3 || s.length() > 16) {

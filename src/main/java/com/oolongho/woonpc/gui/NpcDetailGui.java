@@ -189,13 +189,43 @@ public final class NpcDetailGui extends GuiScreen {
                 .onClick(ctx -> guiManager.goBack(ctx.player()))
                 .build());
 
-        // [1] NPC 名称（不可变）
+        // [1] NPC 名称（可编辑，聊天输入）
         setButton(1, GuiButton.builder(Material.NAME_TAG)
                 .name("<yellow>" + npc.getName())
                 .lore(List.of(
-                        "<gray>名称（不可变）",
-                        "<dark_gray>删除重建可改名"
+                        "<gray>点击修改名称",
+                        "<dark_gray>1-32 字符，仅字母数字下划线"
                 ))
+                .onClick(ctx -> {
+                    Player p = ctx.player();
+                    guiManager.closeGui(p);
+                    chatInputManager.requestInput(p,
+                            "<aqua>请输入新名称（1-32 字符，仅字母数字下划线，输入 cancel 取消）",
+                            ChatInputManager.InputType.NPC_NAME,
+                            newName -> {
+                                if (!CommandSafety.validateName(newName)) {
+                                    p.sendMessage(MM.deserialize("<red>名称不合法（1-32 字符，仅字母数字下划线）。"));
+                                    guiManager.openGui(p, this);
+                                    return;
+                                }
+                                if (!newName.equals(npc.getName()) && npcManager.containsByName(newName)) {
+                                    p.sendMessage(MM.deserialize("<red>名为 <yellow>" + newName + " <red>的 NPC 已存在。"));
+                                    guiManager.openGui(p, this);
+                                    return;
+                                }
+                                try {
+                                    npc.setName(newName);
+                                    storage.save(npc);
+                                    p.sendMessage(MM.deserialize("<green>名称已更新为 <yellow>" + newName + "<green>。"));
+                                } catch (IllegalStateException e) {
+                                    p.sendMessage(MM.deserialize("<red>改名失败: " + e.getMessage()));
+                                }
+                                // 重新构造 NpcDetailGui 以刷新标题（标题含 NPC 名称）
+                                guiManager.openGui(p, new NpcDetailGui(plugin, npcManager, storage,
+                                        actionManager, skinManager, guiManager, chatInputManager, scheduler,
+                                        npc.getId(), npcList, currentIndex, parent));
+                            });
+                })
                 .build());
 
         // [2] 位置（点击：NPC 移动到玩家位置）
@@ -226,14 +256,14 @@ public final class NpcDetailGui extends GuiScreen {
                 .name("<aqua>显示名: <reset>" + dnDisplay)
                 .lore(List.of(
                         "<gray>点击输入新显示名",
-                        "<gray>支持 MiniMessage 格式",
-                        "<dark_gray>输入 none 或 无 清除显示名"
+                        "<gray>支持 & 颜色代码 与 MiniMessage",
+                        "<dark_gray>输入 none 或 无 清除（回落到 NPC 名称）"
                 ))
                 .onClick(ctx -> {
                     Player p = ctx.player();
                     guiManager.closeGui(p);
                     chatInputManager.requestInput(p,
-                            "<aqua>请输入显示名（MiniMessage 格式，输入 cancel 取消，输入 none 清除）",
+                            "<aqua>请输入显示名（支持 & 颜色代码与 MiniMessage，输入 cancel 取消，输入 none 清除）",
                             ChatInputManager.InputType.DISPLAY_NAME,
                             input -> {
                                 if (input.equalsIgnoreCase("none") || input.equals("无")) {
@@ -313,10 +343,10 @@ public final class NpcDetailGui extends GuiScreen {
     private void renderRow2(Npc npc) {
         NpcData d = npc.getData();
 
-        // [9] glowColor cycle
+        // [9] 发光 cycle
         GlowingColor glow = d.glowColor();
         setButton(9, GuiButton.builder(Material.GLOWSTONE)
-                .name("<aqua>发光色: <yellow>" + glow.name())
+                .name("<aqua>发光: <yellow>" + glow.name())
                 .lore(List.of(
                         "<gray>左键: 下一色",
                         "<gray>右键: 上一色",
@@ -770,9 +800,9 @@ public final class NpcDetailGui extends GuiScreen {
 
     // ==================== 辅助方法 ====================
 
-    /** 构造灰色玻璃背景按钮（空白名称） */
+    /** 构造黄绿色玻璃背景按钮（空白名称） */
     private GuiButton backgroundButton() {
-        return GuiButton.builder(Material.GRAY_STAINED_GLASS_PANE)
+        return GuiButton.builder(Material.LIME_STAINED_GLASS_PANE)
                 .name(" ")
                 .build();
     }

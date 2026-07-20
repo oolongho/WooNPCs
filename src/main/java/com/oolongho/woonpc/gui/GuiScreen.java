@@ -6,13 +6,16 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.inventory.ClickType;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
+import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.ApiStatus;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * GUI 屏幕抽象基类。
@@ -51,6 +54,9 @@ public abstract class GuiScreen implements InventoryHolder {
 
     /** 槽位 → 按钮映射（render 时填充） */
     protected final Map<Integer, GuiButton> buttons = new HashMap<>();
+
+    /** 物品槽位集合（render 时通过 {@link #markItemSlot} 填充） */
+    protected final Set<Integer> itemSlots = new HashSet<>();
 
     /** 父级 GUI（可为 null，表示根级 GUI） */
     protected final GuiScreen parent;
@@ -109,6 +115,56 @@ public abstract class GuiScreen implements InventoryHolder {
     }
 
     /**
+     * 将指定槽位标记为"物品槽位"，并设置预览物品。
+     *
+     * <p>物品槽位与按钮槽位的区别：
+     * <ul>
+     *   <li>按钮槽位：点击触发回调，由 {@link GuiManager#onInventoryClick} 取消事件 + {@link #handleClick}</li>
+     *   <li>物品槽位：点击/光标写入由 {@link GuiManager#onInventoryClick} 特殊处理（左键放入光标、
+     *       右键清空、Shift 克隆到背包），并通过 {@link #onItemSlotClick} 钩子同步业务数据</li>
+     * </ul>
+     *
+     * @param slot    槽位索引
+     * @param preview 预览物品（可为 null 表示空槽位）
+     */
+    public void markItemSlot(int slot, @Nullable ItemStack preview) {
+        itemSlots.add(slot);
+        inventory.setItem(slot, preview);
+    }
+
+    /**
+     * 判断指定槽位是否为物品槽位。
+     *
+     * @param slot 槽位索引
+     * @return true 表示该槽位是物品槽位
+     */
+    public boolean isItemSlot(int slot) {
+        return itemSlots.contains(slot);
+    }
+
+    /**
+     * 物品槽位点击钩子：当玩家在物品槽位执行操作（放入/清空）后由 {@link GuiManager} 调用。
+     *
+     * <p>默认空实现，子类按需覆盖以同步业务数据。</p>
+     *
+     * @param player    操作的玩家
+     * @param slot      物品槽位索引
+     * @param newItem   写入后的新物品（null 表示已清空）
+     * @param clickType 点击类型
+     */
+    public void onItemSlotClick(@NotNull Player player, int slot,
+                                @Nullable ItemStack newItem, @NotNull ClickType clickType) {
+        // 默认空实现，子类按需覆盖
+    }
+
+    /**
+     * 清空物品槽位标记（refresh 时调用，避免 stale 标记残留）。
+     */
+    private void clearItemSlots() {
+        itemSlots.clear();
+    }
+
+    /**
      * 渲染并打开 GUI。先调用 {@link #refresh()} 确保内容最新，再打开 Inventory。
      *
      * @param player 目标玩家
@@ -128,13 +184,14 @@ public abstract class GuiScreen implements InventoryHolder {
     }
 
     /**
-     * 无闪烁刷新：清空按钮与 Inventory 后重新调用 {@link #render()}。
+     * 无闪烁刷新：清空按钮、物品槽位标记与 Inventory 后重新调用 {@link #render()}。
      *
      * <p>适用于已打开的 GUI 原地更新内容，不会关闭重开。</p>
      */
     public void refresh() {
         buttons.clear();
         inventory.clear();
+        clearItemSlots();
         render();
     }
 
