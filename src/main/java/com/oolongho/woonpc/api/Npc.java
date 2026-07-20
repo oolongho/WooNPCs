@@ -12,6 +12,7 @@ import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.ApiStatus;
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.Map;
@@ -245,6 +246,12 @@ public abstract class Npc {
     protected abstract <T> void modify(NpcField field, T newValue,
                                        Function<NpcData, T> getter,
                                        Function<NpcData, NpcData> updater);
+
+    /** 设置 NPC 名称（可变）。null 拒绝，触发 NpcModifyEvent（field=NAME，可取消）。 */
+    public final void setName(@NotNull String newName) {
+        Objects.requireNonNull(newName, "name cannot be null");
+        modify(NpcField.NAME, newName, NpcData::name, d -> d.withName(newName));
+    }
 
     /** 设置位置（等价于 moveTo，但触发 NpcModifyEvent，可被取消）。 */
     public final void setLocation(Location location) {
