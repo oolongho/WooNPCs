@@ -185,7 +185,11 @@ public final class MainCommand implements CommandExecutor, TabCompleter {
             return true;
         }
         if (args.length == 0) {
-            send(sender, "<gray>用法: /woonpc <create|remove|list|info|movehere|moveto|skin|equipment|glowing|pose|action|nearby|copy|reload|gui>");
+            if (sender instanceof Player) {
+                this.gui(sender, new String[0]);
+            } else {
+                send(sender, "<gray>用法: /woonpc <create|remove|list|info|movehere|moveto|skin|equipment|glowing|pose|action|nearby|copy|reload|gui>");
+            }
             return true;
         }
         SubCommand sub = subCommands.get(args[0].toLowerCase(Locale.ROOT));
