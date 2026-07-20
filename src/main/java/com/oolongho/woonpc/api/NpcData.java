@@ -166,6 +166,22 @@ public record NpcData(
     // ==================== With 方法（返回新实例，自动累积 dirty） ====================
 
     /**
+     * 修改名称，返回新快照（dirty += NAME）。
+     *
+     * @param newName 新名称，不可为 null
+     * @return 新 NpcData 实例
+     */
+    public NpcData withName(String newName) {
+        Objects.requireNonNull(newName, "name cannot be null");
+        return new NpcData(
+                id, newName, location, displayName, skin, equipment, glowColor, pose,
+                scale, effects, showInTab, collidable, turnToPlayer, turnToPlayerDistance,
+                visibilityDistance, visibilityPermissions, interactionCooldown,
+                withDirty(NpcField.NAME)
+        );
+    }
+
+    /**
      * 修改位置，返回新快照（dirty += LOCATION）。
      *
      * @param newLocation 新位置，不可为 null

@@ -11,7 +11,7 @@ import org.jetbrains.annotations.ApiStatus;
  *
  * <h2>字段分类</h2>
  * <ul>
- *   <li><b>不可变字段</b>（{@code id}、{@code name}）：创建时确定，不进入 dirty 集合</li>
+ *   <li><b>不可变字段</b>（{@code id}）：创建时确定，不进入 dirty 集合</li>
  *   <li><b>可变字段</b>：通过 {@code NpcData.withXxx} 修改时自动加入 dirty 集合</li>
  * </ul>
  *
@@ -21,6 +21,9 @@ import org.jetbrains.annotations.ApiStatus;
  */
 @ApiStatus.Internal
 public enum NpcField {
+
+    /** NPC 名称（唯一标识，通过 {@code setName} 修改，需保证全局唯一） */
+    NAME,
 
     /** 位置（含世界，通过 {@code moveTo} / {@code setLocation} 修改） */
     LOCATION,
