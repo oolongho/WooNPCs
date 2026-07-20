@@ -1,6 +1,8 @@
 package com.oolongho.woonpc.nms.util;
 
 import com.oolongho.woonpc.nms.dto.MetadataEntry;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.EquipmentSlot;
@@ -11,9 +13,12 @@ import org.jetbrains.annotations.Nullable;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -120,6 +125,31 @@ public final class PacketFactory {
             ReflectUtil.getClass("net.minecraft.network.protocol.game.ClientboundUpdateAttributesPacket$AttributeSnapshot");
     private static final Class<?> ATTRIBUTES_CLASS =
             ReflectUtil.getClass("net.minecraft.world.entity.ai.attributes.Attributes");
+
+    // ==================== Team 包相关 NMS 类缓存 ====================
+
+    private static final Class<?> TEAM_PACKET_CLASS =
+            ReflectUtil.getClass("net.minecraft.network.protocol.game.ClientboundSetPlayerTeamPacket");
+    private static final Class<?> PLAYER_TEAM_CLASS =
+            ReflectUtil.getClass("net.minecraft.world.scores.PlayerTeam");
+    private static final Class<?> SCOREBOARD_CLASS =
+            ReflectUtil.getClass("net.minecraft.world.scores.Scoreboard");
+    private static final Class<?> TEAM_VISIBILITY_CLASS =
+            ReflectUtil.getClass("net.minecraft.world.scores.Team$Visibility");
+    private static final Class<?> TEAM_COLLISION_RULE_CLASS =
+            ReflectUtil.getClass("net.minecraft.world.scores.Team$CollisionRule");
+    private static final Class<?> CHAT_FORMATTING_CLASS =
+            ReflectUtil.getClass("net.minecraft.ChatFormatting");
+
+    /**
+     * {@code TeamColor} 反射类缓存。
+     *
+     * <p><b>版本可选</b>：1.21.7+ 引入，替代 {@code ChatFormatting} 作为
+     * {@code PlayerTeam.setColor} 的参数类型。1.21.0-1.21.6 为 null，
+     * 此时 {@code setColor} 接受 {@code ChatFormatting}。</p>
+     */
+    private static final Class<?> TEAM_COLOR_CLASS =
+            ReflectUtil.getClassOrNull("net.minecraft.world.scores.TeamColor");
 
     // ==================== CraftPlayer / ServerPlayer ====================
 
@@ -557,6 +587,290 @@ public final class PacketFactory {
         }
     }
 
+    // ==================== Team 包 ====================
+
+    // ---- 反射缓存 ----
+
+    private static final Method TEAM_CREATE_OR_MODIFY_METHOD =
+            ReflectUtil.getMethod(TEAM_PACKET_CLASS, "createAddOrModifyPacket",
+                    PLAYER_TEAM_CLASS, boolean.class);
+
+    private static final Method TEAM_REMOVE_METHOD =
+            ReflectUtil.getMethod(TEAM_PACKET_CLASS, "createRemovePacket", PLAYER_TEAM_CLASS);
+
+    private static final Method TEAM_SET_NAME_TAG_VISIBILITY_METHOD =
+            ReflectUtil.getMethod(PLAYER_TEAM_CLASS, "setNameTagVisibility", TEAM_VISIBILITY_CLASS);
+
+    private static final Method TEAM_SET_COLLISION_RULE_METHOD =
+            ReflectUtil.getMethod(PLAYER_TEAM_CLASS, "setCollisionRule", TEAM_COLLISION_RULE_CLASS);
+
+    private static final Method TEAM_GET_PLAYERS_METHOD =
+            ReflectUtil.getMethod(PLAYER_TEAM_CLASS, "getPlayers");
+
+    /**
+     * {@code setColor} 方法版本自适应缓存。
+     *
+     * <p>1.21.0-1.21.6：{@code setColor(ChatFormatting)}；
+     * 1.21.7+：{@code setColor(Optional<TeamColor>)}。
+     * 通过 {@link #resolveTeamSetColorMethod()} 在类初始化时扫描确定。</p>
+     */
+    private static final Method TEAM_SET_COLOR_METHOD = resolveTeamSetColorMethod();
+
+    /** {@code Team.Visibility.ALWAYS} 枚举常量 */
+    private static final Object VISIBILITY_ALWAYS =
+            ReflectUtil.getFieldValue(TEAM_VISIBILITY_CLASS, "ALWAYS");
+
+    /** {@code Team.Visibility.NEVER} 枚举常量 */
+    private static final Object VISIBILITY_NEVER =
+            ReflectUtil.getFieldValue(TEAM_VISIBILITY_CLASS, "NEVER");
+
+    /** {@code Team.CollisionRule.ALWAYS} 枚举常量 */
+    private static final Object COLLISION_RULE_ALWAYS =
+            ReflectUtil.getFieldValue(TEAM_COLLISION_RULE_CLASS, "ALWAYS");
+
+    /** {@code Team.CollisionRule.NEVER} 枚举常量 */
+    private static final Object COLLISION_RULE_NEVER =
+            ReflectUtil.getFieldValue(TEAM_COLLISION_RULE_CLASS, "NEVER");
+
+    /**
+     * 共享 Scoreboard 实例（仅用于构造 PlayerTeam）。
+     *
+     * <p>NMS {@code new PlayerTeam(Scoreboard, String)} 构造器要求传入 Scoreboard 参数，
+     * 但实际 {@code ClientboundSetPlayerTeamPacket.createAddOrModifyPacket} 工厂方法
+     * 仅读取 PlayerTeam 的属性（name、color、visibility、collisionRule、players 等），
+     * 不依赖 Scoreboard 实例本身。故复用一个临时 Scoreboard 即可，
+     * 不会影响服务端真实记分板状态。</p>
+     */
+    private static final Object SHARED_SCOREBOARD =
+            ReflectUtil.newInstance(SCOREBOARD_CLASS, new Class<?>[0]);
+
+    /**
+     * Adventure {@link NamedTextColor} → NMS 颜色名（大写，对应 ChatFormatting 静态字段名）映射。
+     *
+     * <p>手工映射，避免依赖 {@code PaperAdventure.asVanilla} 内部 API。
+     * 大写名用于：① 取 {@code ChatFormatting.<NAME>} 静态字段（1.21.0-1.21.6）；
+     * ② 转小写后传 {@code TeamColor.byName(name)}（1.21.7+）。</p>
+     */
+    private static final Map<NamedTextColor, String> NAMED_TEXT_COLOR_TO_NAME = Map.ofEntries(
+            Map.entry(NamedTextColor.BLACK, "BLACK"),
+            Map.entry(NamedTextColor.DARK_BLUE, "DARK_BLUE"),
+            Map.entry(NamedTextColor.DARK_GREEN, "DARK_GREEN"),
+            Map.entry(NamedTextColor.DARK_AQUA, "DARK_AQUA"),
+            Map.entry(NamedTextColor.DARK_RED, "DARK_RED"),
+            Map.entry(NamedTextColor.DARK_PURPLE, "DARK_PURPLE"),
+            Map.entry(NamedTextColor.GOLD, "GOLD"),
+            Map.entry(NamedTextColor.GRAY, "GRAY"),
+            Map.entry(NamedTextColor.DARK_GRAY, "DARK_GRAY"),
+            Map.entry(NamedTextColor.BLUE, "BLUE"),
+            Map.entry(NamedTextColor.GREEN, "GREEN"),
+            Map.entry(NamedTextColor.AQUA, "AQUA"),
+            Map.entry(NamedTextColor.RED, "RED"),
+            Map.entry(NamedTextColor.LIGHT_PURPLE, "LIGHT_PURPLE"),
+            Map.entry(NamedTextColor.YELLOW, "YELLOW"),
+            Map.entry(NamedTextColor.WHITE, "WHITE"));
+
+    // ---- 公共方法 ----
+
+    /**
+     * 构造 Team 创建包（mode=0）。
+     *
+     * <p>对应 {@code ClientboundSetPlayerTeamPacket.createAddOrModifyPacket(team, true)}。
+     * 用于在客户端创建 Scoreboard Team，主要场景：隐藏 NPC 头顶 nametag、
+     * 控制碰撞/推挤规则、设置发光颜色。</p>
+     *
+     * <p><b>collisionNever 与 pushNever 合并</b>：NMS 中 {@code Team.CollisionRule}
+     * 同时控制碰撞与推挤，无独立 push 规则，故任一为 {@code true} 即设为
+     * {@code CollisionRule.NEVER}，否则 {@code ALWAYS}。</p>
+     *
+     * <p><b>版本自适应</b>：{@code setColor} 方法签名在 1.21.7+ 变更
+     * （{@code ChatFormatting} → {@code Optional<TeamColor>}），
+     * 由 {@link #TEAM_SET_COLOR_METHOD} 在类初始化时反射扫描确定。</p>
+     *
+     * @param teamName         队伍名（不可为 null，建议 {@code woonpc_<entityId>}）
+     * @param entries          队伍成员名（GameProfile username 列表，至少 1 个）
+     * @param nameTagInvisible {@code true} 时 nameTagVisibility=NEVER，否则 ALWAYS
+     * @param collisionNever   {@code true} 时 collisionRule=NEVER
+     * @param pushNever        {@code true} 时 collisionRule=NEVER（与 collisionNever 合并判定）
+     * @param color            发光色，{@code null} 表示不设置（继承默认 RESET，无发光）
+     * @return NMS {@code ClientboundSetPlayerTeamPacket} 实例（mode=0）
+     */
+    public static Object createTeamCreatePacket(String teamName, Collection<String> entries,
+                                                boolean nameTagInvisible, boolean collisionNever,
+                                                boolean pushNever, @Nullable NamedTextColor color) {
+        Object playerTeam = createConfiguredPlayerTeam(
+                teamName, nameTagInvisible, collisionNever, pushNever, color);
+        try {
+            @SuppressWarnings("unchecked")
+            Collection<String> players = (Collection<String>) TEAM_GET_PLAYERS_METHOD.invoke(playerTeam);
+            players.addAll(entries);
+        } catch (ReflectiveOperationException e) {
+            throw new WooNPCsReflectException("Failed to add entries to PlayerTeam: " + teamName, e);
+        }
+        return invokeTeamCreateOrModify(playerTeam, true);
+    }
+
+    /**
+     * 构造 Team 更新包（mode=2），不传 entries。
+     *
+     * <p>对应 {@code ClientboundSetPlayerTeamPacket.createAddOrModifyPacket(team, false)}。
+     * 用于在队伍已存在的情况下更新属性（nametag 可见性、碰撞规则、发光色等）。</p>
+     *
+     * @param teamName         队伍名
+     * @param nameTagInvisible {@code true} 时 nameTagVisibility=NEVER，否则 ALWAYS
+     * @param collisionNever   {@code true} 时 collisionRule=NEVER
+     * @param pushNever        {@code true} 时 collisionRule=NEVER（与 collisionNever 合并判定）
+     * @param color            发光色，{@code null} 表示不设置
+     * @return NMS {@code ClientboundSetPlayerTeamPacket} 实例（mode=2）
+     */
+    public static Object createTeamUpdatePacket(String teamName, boolean nameTagInvisible,
+                                                boolean collisionNever, boolean pushNever,
+                                                @Nullable NamedTextColor color) {
+        Object playerTeam = createConfiguredPlayerTeam(
+                teamName, nameTagInvisible, collisionNever, pushNever, color);
+        return invokeTeamCreateOrModify(playerTeam, false);
+    }
+
+    /**
+     * 构造 Team 移除包（mode=1）。
+     *
+     * <p>对应 {@code ClientboundSetPlayerTeamPacket.createRemovePacket(team)}。
+     * 用于在客户端移除已存在的 Scoreboard Team。仅依赖 teamName，
+     * PlayerTeam 实例为占位（无属性设置）。</p>
+     *
+     * @param teamName 队伍名
+     * @return NMS {@code ClientboundSetPlayerTeamPacket} 实例（mode=1）
+     */
+    public static Object createTeamRemovePacket(String teamName) {
+        Object playerTeam = ReflectUtil.newInstance(PLAYER_TEAM_CLASS,
+                new Class<?>[]{SCOREBOARD_CLASS, String.class}, SHARED_SCOREBOARD, teamName);
+        try {
+            return TEAM_REMOVE_METHOD.invoke(null, playerTeam);
+        } catch (ReflectiveOperationException e) {
+            throw new WooNPCsReflectException(
+                    "Failed to invoke ClientboundSetPlayerTeamPacket.createRemovePacket", e);
+        }
+    }
+
+    // ---- 私有辅助方法 ----
+
+    /**
+     * 构造并配置 PlayerTeam 实例（设置 nameTagVisibility / collisionRule / color）。
+     * 不添加 entries（由 {@link #createTeamCreatePacket} 单独处理）。
+     */
+    private static Object createConfiguredPlayerTeam(String teamName, boolean nameTagInvisible,
+                                                    boolean collisionNever, boolean pushNever,
+                                                    @Nullable NamedTextColor color) {
+        Object playerTeam = ReflectUtil.newInstance(PLAYER_TEAM_CLASS,
+                new Class<?>[]{SCOREBOARD_CLASS, String.class}, SHARED_SCOREBOARD, teamName);
+        try {
+            TEAM_SET_NAME_TAG_VISIBILITY_METHOD.invoke(playerTeam,
+                    nameTagInvisible ? VISIBILITY_NEVER : VISIBILITY_ALWAYS);
+            // NMS 仅 collisionRule 一项同时控制碰撞与推挤，故任一为 true 即 NEVER
+            TEAM_SET_COLLISION_RULE_METHOD.invoke(playerTeam,
+                    (collisionNever || pushNever) ? COLLISION_RULE_NEVER : COLLISION_RULE_ALWAYS);
+            if (color != null) {
+                applyTeamColor(playerTeam, color);
+            }
+        } catch (ReflectiveOperationException e) {
+            throw new WooNPCsReflectException("Failed to configure PlayerTeam: " + teamName, e);
+        }
+        return playerTeam;
+    }
+
+    /**
+     * 调用 {@code createAddOrModifyPacket(team, boolean)} 静态工厂方法。
+     *
+     * @param playerTeam 已配置的 PlayerTeam 实例
+     * @param create     {@code true}=create(mode=0)，{@code false}=update(mode=2)
+     */
+    private static Object invokeTeamCreateOrModify(Object playerTeam, boolean create) {
+        try {
+            return TEAM_CREATE_OR_MODIFY_METHOD.invoke(null, playerTeam, create);
+        } catch (ReflectiveOperationException e) {
+            throw new WooNPCsReflectException(
+                    "Failed to invoke ClientboundSetPlayerTeamPacket.createAddOrModifyPacket", e);
+        }
+    }
+
+    /**
+     * 根据 setColor 方法签名版本分支调用。
+     *
+     * <ul>
+     *   <li>1.21.0-1.21.6：{@code setColor(ChatFormatting)} —— 取 ChatFormatting 静态字段</li>
+     *   <li>1.21.7+：{@code setColor(Optional<TeamColor>)} —— 包装 Optional.of(TeamColor.byName)</li>
+     * </ul>
+     */
+    private static void applyTeamColor(Object playerTeam, NamedTextColor color) {
+        Class<?> paramType = TEAM_SET_COLOR_METHOD.getParameterTypes()[0];
+        try {
+            if (paramType == CHAT_FORMATTING_CLASS) {
+                TEAM_SET_COLOR_METHOD.invoke(playerTeam, toChatFormatting(color));
+            } else {
+                // 1.21.7+: setColor(Optional<TeamColor>)
+                TEAM_SET_COLOR_METHOD.invoke(playerTeam, Optional.of(toTeamColor(color)));
+            }
+        } catch (ReflectiveOperationException e) {
+            throw new WooNPCsReflectException("Failed to set PlayerTeam color: " + color, e);
+        }
+    }
+
+    /**
+     * 将 {@link NamedTextColor} 转换为 NMS {@code ChatFormatting}（1.21.0-1.21.6）。
+     * 通过 {@link #NAMED_TEXT_COLOR_TO_NAME} 取大写名，再读 {@code ChatFormatting.<NAME>} 静态字段。
+     */
+    private static Object toChatFormatting(NamedTextColor color) {
+        String name = NAMED_TEXT_COLOR_TO_NAME.get(color);
+        if (name == null) {
+            throw new WooNPCsReflectException("No ChatFormatting mapping for NamedTextColor: " + color);
+        }
+        return ReflectUtil.getFieldValue(CHAT_FORMATTING_CLASS, name);
+    }
+
+    /**
+     * 将 {@link NamedTextColor} 转换为 NMS {@code TeamColor}（1.21.7+）。
+     * 通过 {@link #NAMED_TEXT_COLOR_TO_NAME} 取大写名，转小写后调 {@code TeamColor.byName(name)}。
+     */
+    private static Object toTeamColor(NamedTextColor color) {
+        String name = NAMED_TEXT_COLOR_TO_NAME.get(color);
+        if (name == null) {
+            throw new WooNPCsReflectException("No TeamColor mapping for NamedTextColor: " + color);
+        }
+        Method byName = ReflectUtil.getMethod(TEAM_COLOR_CLASS, "byName", String.class);
+        try {
+            return byName.invoke(null, name.toLowerCase(Locale.ROOT));
+        } catch (ReflectiveOperationException e) {
+            throw new WooNPCsReflectException("Failed to invoke TeamColor.byName", e);
+        }
+    }
+
+    /**
+     * 反射扫描 {@code PlayerTeam.setColor} 方法，按版本自适应。
+     *
+     * <p>查找顺序：</p>
+     * <ol>
+     *   <li>{@code setColor(ChatFormatting)} —— 1.21.0-1.21.6</li>
+     *   <li>{@code setColor(Optional<TeamColor>)} —— 1.21.7+（仅当 TEAM_COLOR_CLASS 存在时尝试）</li>
+     * </ol>
+     *
+     * <p>两者均不存在时抛 {@link WooNPCsReflectException}（理论不会发生，
+     * 因为至少存在其一）。</p>
+     */
+    private static Method resolveTeamSetColorMethod() {
+        Method m = ReflectUtil.getMethodOrNull(PLAYER_TEAM_CLASS, "setColor", CHAT_FORMATTING_CLASS);
+        if (m != null) {
+            return m;
+        }
+        if (TEAM_COLOR_CLASS != null) {
+            m = ReflectUtil.getMethodOrNull(PLAYER_TEAM_CLASS, "setColor", Optional.class);
+            if (m != null) {
+                return m;
+            }
+        }
+        throw new WooNPCsReflectException(
+                "Cannot find PlayerTeam.setColor method (expected setColor(ChatFormatting) "
+                        + "or setColor(Optional<TeamColor>))");
+    }
+
     // ==================== Component 构造 ====================
 
     /**
@@ -570,6 +884,31 @@ public final class PacketFactory {
             return COMPONENT_LITERAL.invoke(null, text);
         } catch (ReflectiveOperationException e) {
             throw new WooNPCsReflectException("Failed to invoke Component.literal(String)", e);
+        }
+    }
+
+    /**
+     * 将 Adventure {@link Component} 转换为 NMS Component。
+     *
+     * <p>通过反射调用 Paper 内置的 {@code io.papermc.paper.adventure.PaperAdventure.asVanilla(Component)}
+     * 静态方法完成转换。Paper 1.21+ 全版本均暴露此 API，但为避免编译期硬依赖 Paper 内部类，
+     * 此处使用反射调用。</p>
+     *
+     * <p>支持 Adventure {@code Component} 携带的所有样式（颜色、装饰、ClickEvent 等），
+     * 适用于已通过 {@code LegacyComponentSerializer} 或 {@code MiniMessage} 解析后的 Component。</p>
+     *
+     * @param adventureComponent Adventure Component，不可为 null
+     * @return NMS Component 实例
+     */
+    public static Object createComponent(Component adventureComponent) {
+        try {
+            Class<?> paperAdventureClass =
+                    Class.forName("io.papermc.paper.adventure.PaperAdventure");
+            Method asVanilla =
+                    ReflectUtil.getMethod(paperAdventureClass, "asVanilla", Component.class);
+            return asVanilla.invoke(null, adventureComponent);
+        } catch (ReflectiveOperationException e) {
+            throw new WooNPCsReflectException("Failed to invoke PaperAdventure.asVanilla", e);
         }
     }
 

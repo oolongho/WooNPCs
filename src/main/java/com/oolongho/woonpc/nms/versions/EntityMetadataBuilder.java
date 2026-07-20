@@ -1,14 +1,15 @@
 package com.oolongho.woonpc.nms.versions;
 
 import com.oolongho.woonpc.api.NpcData;
+import com.oolongho.woonpc.hologram.DisplayNameRenderer;
 import com.oolongho.woonpc.nms.dto.MetadataEntry;
+import com.oolongho.woonpc.nms.util.PacketFactory;
 import com.oolongho.woonpc.nms.util.ReflectUtil;
-import com.oolongho.woonpc.nms.util.WooNPCsReflectException;
 import com.oolongho.woonpc.npc.NpcEffect;
 import com.oolongho.woonpc.npc.NpcPose;
+import net.kyori.adventure.text.Component;
 import org.jetbrains.annotations.ApiStatus;
 
-import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -79,17 +80,9 @@ public final class EntityMetadataBuilder {
     /** 启用所有皮肤层：披风+上衣+左右袖+左右裤腿+帽子 */
     private static final byte SKIN_PARTS_ALL = 0x01 | 0x02 | 0x04 | 0x08 | 0x10 | 0x20 | 0x40;
 
-    /** NMS Component 类（反射加载，1.21+ 类名稳定） */
-    private static final Class<?> COMPONENT_CLASS =
-            ReflectUtil.getClass("net.minecraft.network.chat.Component");
-
     /** NMS Pose 类（反射加载） */
     private static final Class<?> POSE_CLASS =
             ReflectUtil.getClass("net.minecraft.world.entity.Pose");
-
-    /** Component.literal(String) 静态方法（缓存） */
-    private static final Method COMPONENT_LITERAL =
-            ReflectUtil.getMethod(COMPONENT_CLASS, "literal", String.class);
 
     private EntityMetadataBuilder() {
         throw new IllegalAccessError("Utility class");
@@ -102,12 +95,17 @@ public final class EntityMetadataBuilder {
      * 包含以下条目：</p>
      * <ol>
      *   <li>索引 0：状态位 byte（NpcEffect 合并）</li>
-     *   <li>索引 2：自定义名 Optional&lt;Component&gt;（null/空时为 Optional.empty()）</li>
-     *   <li>索引 3：自定义名是否可见 boolean</li>
+     *   <li>索引 2：自定义名 Optional&lt;Component&gt;（始终非空，displayName 为 null 时回落到 name）</li>
+     *   <li>索引 3：自定义名是否可见 boolean（始终 true，GameProfile 名牌由 Team 包隐藏）</li>
      *   <li>索引 5：无重力 boolean（始终 true）</li>
      *   <li>索引 6：Pose 枚举（由 NpcPose 转换）</li>
      *   <li>索引 16：玩家皮肤层 byte（启用所有层）</li>
      * </ol>
+     *
+     * <p><b>CustomName 渲染</b>：实体 metadata 的 CustomName 与 TextDisplay 头顶显示名共用
+     * {@link DisplayNameRenderer#parseDisplayName(String)} 解析逻辑（支持 {@code &} 颜色代码与
+     * MiniMessage 标签）。虽然 GameProfile 玩家名牌已被 Team 包（nameTagVisibility=NEVER）隐藏，
+     * CustomName 不会在头顶显示，但保留与 TextDisplay 一致的颜色解析以维持数据一致性。</p>
      *
      * @param data NPC 数据快照，不可为 null
      * @return 元数据项列表（非空，至少包含状态位与皮肤层）
@@ -119,16 +117,12 @@ public final class EntityMetadataBuilder {
         byte flags = NpcEffect.merge(data.effects());
         entries.add(new MetadataEntry(IDX_SHARED_FLAGS, SER_BYTE, flags));
 
-        // 自定义名 + 可见性
+        // 自定义名 + 可见性：displayName 为 null 或空时回落到 name()，始终非空
         String displayName = data.displayName();
-        if (displayName != null && !displayName.isEmpty()) {
-            Object component = createComponent(displayName);
-            entries.add(new MetadataEntry(IDX_CUSTOM_NAME, SER_OPTIONAL_COMPONENT, Optional.of(component)));
-            entries.add(new MetadataEntry(IDX_CUSTOM_NAME_VISIBLE, SER_BOOLEAN, Boolean.TRUE));
-        } else {
-            entries.add(new MetadataEntry(IDX_CUSTOM_NAME, SER_OPTIONAL_COMPONENT, Optional.empty()));
-            entries.add(new MetadataEntry(IDX_CUSTOM_NAME_VISIBLE, SER_BOOLEAN, Boolean.FALSE));
-        }
+        String customNameText = (displayName != null && !displayName.isEmpty()) ? displayName : data.name();
+        Object component = createComponent(DisplayNameRenderer.parseDisplayName(customNameText));
+        entries.add(new MetadataEntry(IDX_CUSTOM_NAME, SER_OPTIONAL_COMPONENT, Optional.of(component)));
+        entries.add(new MetadataEntry(IDX_CUSTOM_NAME_VISIBLE, SER_BOOLEAN, Boolean.TRUE));
 
         // 无重力：NPC 不应受重力影响下落
         entries.add(new MetadataEntry(IDX_NO_GRAVITY, SER_BOOLEAN, Boolean.TRUE));
@@ -144,20 +138,17 @@ public final class EntityMetadataBuilder {
     }
 
     /**
-     * 通过反射调用 {@code Component.literal(String)} 创建 NMS Component。
+     * 将 Adventure {@link Component} 转换为 NMS Component。
      *
-     * <p>1.21+ NMS Component 类名与方法签名稳定，可直接反射调用。
-     * 失败时抛 {@link WooNPCsReflectException} 表明 NMS 反射异常。</p>
+     * <p>委托 {@link PacketFactory#createComponent(Component)} 通过 Paper 的
+     * {@code PaperAdventure.asVanilla(Component)} 反射调用完成转换，
+     * 支持 Adventure Component 携带的所有样式（颜色、装饰等）。</p>
      *
-     * @param text 文本内容
+     * @param adventureComponent Adventure Component
      * @return NMS Component 实例
      */
-    private static Object createComponent(String text) {
-        try {
-            return COMPONENT_LITERAL.invoke(null, text);
-        } catch (ReflectiveOperationException e) {
-            throw new WooNPCsReflectException("Failed to invoke Component.literal(String)", e);
-        }
+    private static Object createComponent(Component adventureComponent) {
+        return PacketFactory.createComponent(adventureComponent);
     }
 
     /**

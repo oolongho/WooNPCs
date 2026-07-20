@@ -19,7 +19,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>查找策略：</p>
  * <ul>
  *   <li>字段：本类 declared → 公有 → 父类继承链</li>
- *   <li>方法：本类 declared → 父类继承链（按名称 + 形参类型精确匹配）</li>
+ *   <li>方法：本类 declared → declared 装箱回退 → 公有 → 公有装箱回退 → 父类继承链
+ *       （按名称 + 形参类型匹配，装箱类型自动回退到原始类型，详见
+ *       {@link #findMethodInHierarchy}）</li>
  *   <li>构造器：按形参类型精确匹配</li>
  * </ul>
  *
@@ -38,6 +40,24 @@ public final class ReflectUtil {
 
     /** 构造器缓存：className#(paramTypes) → Constructor */
     private static final Map<String, Constructor<?>> CONSTRUCTOR_CACHE = new ConcurrentHashMap<>();
+
+    /**
+     * 装箱类型 → 原始类型映射表。
+     *
+     * <p>用于 {@link #findMethodInHierarchy} 的装箱回退：当调用方传入 {@code Integer.valueOf(42)}
+     * 时，{@link #toParamTypes} 推断形参类型为 {@code Integer.class}，但目标方法签名是
+     * {@code int.class}（如 {@code FriendlyByteBuf.writeVarInt(int)}）。本表用于在精确匹配
+     * 失败时将装箱类型转换为原始类型再次尝试。</p>
+     */
+    private static final Map<Class<?>, Class<?>> BOXED_TO_PRIMITIVE = Map.of(
+            Integer.class, int.class,
+            Long.class, long.class,
+            Boolean.class, boolean.class,
+            Double.class, double.class,
+            Float.class, float.class,
+            Short.class, short.class,
+            Byte.class, byte.class,
+            Character.class, char.class);
 
     private ReflectUtil() {
         throw new IllegalAccessError("Utility class");
@@ -341,24 +361,76 @@ public final class ReflectUtil {
     /**
      * 在类继承链中查找方法（按名称 + 形参类型精确匹配）。
      *
+     * <p>装箱回退策略：当精确匹配（含 declared 与 public）均失败时，
+     * 将形参数组中的装箱类型（如 {@code Integer.class}）转换为对应的原始类型
+     * （如 {@code int.class}）再次尝试 declared 与 public 匹配。这使得
+     * {@code ReflectUtil.invokeMethod(buf, "writeVarInt", Integer.valueOf(42))}
+     * 能正确解析到 {@code FriendlyByteBuf.writeVarInt(int)} 等签名。</p>
+     *
+     * <p>四阶段查找顺序：declared 精确 → declared 原始 → public 精确 → public 原始。
+     * 任一阶段命中即返回；全部失败则继续向父类查找。</p>
+     *
      * @return 找到的方法，或 null
      */
     private static Method findMethodInHierarchy(Class<?> clazz, String methodName, Class<?>[] paramTypes) {
+        Class<?>[] primitiveTypes = toPrimitiveTypes(paramTypes);
+        boolean hasPrimitiveFallback = (primitiveTypes != paramTypes);
         Class<?> current = clazz;
         while (current != null && current != Object.class) {
             try {
                 return current.getDeclaredMethod(methodName, paramTypes);
             } catch (NoSuchMethodException ignored) {
-                // 尝试 public 方法（含接口）
+                // 装箱 → 原始类型回退（declared）
+                if (hasPrimitiveFallback) {
+                    try {
+                        return current.getDeclaredMethod(methodName, primitiveTypes);
+                    } catch (NoSuchMethodException ignoredP) {
+                        // 继续尝试 public
+                    }
+                }
+                // public 精确匹配
                 try {
                     return current.getMethod(methodName, paramTypes);
                 } catch (NoSuchMethodException ignored2) {
-                    // 继续向上
+                    // public 装箱 → 原始类型回退
+                    if (hasPrimitiveFallback) {
+                        try {
+                            return current.getMethod(methodName, primitiveTypes);
+                        } catch (NoSuchMethodException ignoredP2) {
+                            // 继续向上查找父类
+                        }
+                    }
                 }
             }
             current = current.getSuperclass();
         }
         return null;
+    }
+
+    /**
+     * 将形参数组中的装箱类型转换为对应的原始类型。
+     *
+     * <p>惰性拷贝策略：仅当数组中确实存在装箱类型时才创建新数组，
+     * 否则原样返回入参引用（便于上层用 {@code ==} 引用比较判断是否需要回退）。</p>
+     *
+     * @param paramTypes 原始形参数组
+     * @return 原始类型数组（若存在装箱类型）或入参引用（若全为非装箱类型）
+     */
+    private static Class<?>[] toPrimitiveTypes(Class<?>[] paramTypes) {
+        if (paramTypes.length == 0) {
+            return paramTypes;
+        }
+        Class<?>[] primitives = null;
+        for (int i = 0; i < paramTypes.length; i++) {
+            Class<?> primitive = BOXED_TO_PRIMITIVE.get(paramTypes[i]);
+            if (primitive != null) {
+                if (primitives == null) {
+                    primitives = paramTypes.clone();
+                }
+                primitives[i] = primitive;
+            }
+        }
+        return primitives != null ? primitives : paramTypes;
     }
 
     /**
