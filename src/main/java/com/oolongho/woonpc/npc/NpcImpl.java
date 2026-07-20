@@ -291,12 +291,13 @@ public final class NpcImpl extends Npc {
             return;
         }
         synchronized (this) {
-            data = updater.apply(data);
-            // NAME 字段需同步 NpcManagerImpl 的 nameIndex 索引（原子 putIfAbsent + remove 旧名）。
-            // 若新名已被占用，rename 抛 IllegalStateException 向上传播，与外部调用 npc.setName 的契约一致。
+            // NAME 字段先同步 NpcManagerImpl 的 nameIndex 索引（原子 putIfAbsent + remove 旧名）。
+            // 必须在更新 data 之前调用：若新名已被占用，rename 抛 IllegalStateException 向上传播，
+            // data 保持未变更状态，索引与 data 一致；若先更新 data 再 rename，异常时 data 已变但索引未变。
             if (field == NpcField.NAME) {
                 manager.rename(getId(), (String) newValue);
             }
+            data = updater.apply(data);
         }
         update();  // synchronized，同步 dirty 字段到客户端
     }
